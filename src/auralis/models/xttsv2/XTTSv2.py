@@ -1,3 +1,7 @@
+import os
+import hashlib
+import torch
+torch.set_grad_enabled(False)
 import asyncio
 import functools
 import time
@@ -148,6 +152,7 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
         self.encoder_semaphore = asyncio.BoundedSemaphore(semaphore_concurrency)
         self.decoder_semaphore = asyncio.BoundedSemaphore(semaphore_concurrency) # empirically found a good value
         self.eval()
+        self._conditioning_cache = {}
 
     def get_memory_usage_curve(self):
         """Calculate the memory usage curve based on concurrency level.
@@ -205,6 +210,7 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
             RuntimeError: If unable to determine memory usage for model initialization.
         """
         """Initialize models with AsyncVLLMEngine."""
+        import os
         max_seq_num = concurrency
         mem_utils = self.get_memory_percentage(self.max_gb_for_vllm_model * 1024 ** 3) #
         if not mem_utils:
@@ -217,7 +223,7 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
             max_model_len=self.gpt_config.max_text_tokens +
                           self.gpt_config.max_audio_tokens +
                           32 + 5 + 3, # this is from the xttsv2 code, 32 is the conditioning sql
-            gpu_memory_utilization=mem_utils,
+            gpu_memory_utilization=float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.45")),
             trust_remote_code=True,
             enforce_eager=True,
             limit_mm_per_prompt={"audio": 1}, # even if more audio are present, they'll be condendesed into one
@@ -476,8 +482,10 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
         try:
             yield
         finally:
-            torch.cuda.synchronize()
-            await asyncio.sleep(0.1)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+            await asyncio.sleep(0.01)
             torch.cuda.empty_cache()
 
     def get_style_emb(self, cond_input: torch.Tensor, return_latent: Optional[bool] = False) -> torch.Tensor:
@@ -586,6 +594,26 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
             sound_norm_refs=False,
             load_sr=22050,
     ):
+        # Generate cache key
+        try:
+            if isinstance(audio_reference, list):
+                key_parts = []
+                for item in audio_reference:
+                    if isinstance(item, bytes):
+                        key_parts.append(hashlib.md5(item).hexdigest())
+                    else:
+                        key_parts.append(str(item))
+                cache_key = "_".join(key_parts)
+            elif isinstance(audio_reference, bytes):
+                cache_key = hashlib.md5(audio_reference).hexdigest()
+            else:
+                cache_key = str(audio_reference)
+            
+            if hasattr(self, "_conditioning_cache") and cache_key in self._conditioning_cache:
+                lat, spk = self._conditioning_cache[cache_key]
+                return lat.clone(), spk.clone()
+        except Exception:
+            cache_key = None
         """Generate audio conditioning from reference files.
 
         Args:
