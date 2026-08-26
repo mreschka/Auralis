@@ -171,6 +171,11 @@ def split_sentence(text: str, lang: str, text_split_length: int = 250) -> List[s
         - [`get_spacy_lang`][auralis.models.xttsv2.config.tokenizer.get_spacy_lang]: Language model selector
     """
     text = text.strip()
+    import re
+    # Split on sentence terminators (. ! ? \n) to enable parallel vLLM batching
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?\n])\s+', text) if s.strip()]
+    if len(sentences) > 1:
+        return sentences
     if len(text) <= text_split_length:
         return [text]
 
