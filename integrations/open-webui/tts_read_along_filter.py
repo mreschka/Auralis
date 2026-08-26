@@ -31,9 +31,17 @@ class Filter:
             default="ollama",
             description="API key if required."
         )
+        debug: bool = Field(
+            default=True,
+            description="Enable verbose debug logs in Open WebUI server output and UI status badges."
+        )
         use_task_model: bool = Field(
             default=True,
             description="Use LLM for intelligent paragraph structuring and expansion (with rule-based fallback)."
+        )
+        mode: str = Field(
+            default="outlet_task_model",
+            description="Mode: 'outlet_task_model' (rewrites via task model) or 'inlet_prompt_injection' (instructs main model directly) or 'rule_based_only'."
         )
         custom_system_prompt: str = Field(
             default=(
@@ -66,7 +74,6 @@ class Filter:
 
     def _rule_based_optimizer(self, text: str) -> str:
         """Deterministic fast rule-based optimizer for abbreviations, symbols and paragraph splitting."""
-        # 1. Expand abbreviations & symbols
         replacements = [
             (r'\bz\.B\.', 'zum Beispiel'),
             (r'\bz\.\s*B\.', 'zum Beispiel'),
@@ -95,10 +102,8 @@ class Filter:
         paragraphs = text.split('\n\n')
         if paragraphs:
             first_para = paragraphs[0].strip()
-            # Split first paragraph on sentence boundary
             sents = re.split(r'(?<=[.!?])\s+(?=[A-ZÄÖÜ0-9])', first_para)
             if len(sents) >= 3:
-                # Turn first 2-3 sentences into standalone paragraphs
                 new_start = [sents[0], sents[1]]
                 remainder = " ".join(sents[2:])
                 if remainder:
@@ -108,6 +113,37 @@ class Filter:
 
         return text.strip()
 
+    async def inlet(
+        self,
+        body: dict,
+        __user__: Optional[dict] = None,
+        __model__: Optional[dict] = None,
+        __event_emitter__: Optional[Callable[[dict], Awaitable[None]]] = None,
+    ) -> dict:
+        """Inlet hook: injects direct TTS formatting rules into the main prompt if in inlet mode."""
+        if self.valves.mode != "inlet_prompt_injection":
+            return body
+
+        if self.valves.debug:
+            print("[TTS-FILTER] Running INLET prompt injection...")
+
+        instruction = (
+            "\n\n[SYSTEM INSTRUKTION: TTS-FORMATIERUNG]\n"
+            "Strukturiere deine Antwort für Absatz-basierte Sprachsynthese:\n"
+            "1. Trenne die ersten 2 bis 3 Sätze jeweils als eigene kurze Absätze mit doppeltem Zeilenumbruch (\\n\\n) ab, damit die Sprachausgabe ohne Verzögerung starten kann.\n"
+            "2. Schreibe danach ausführliche Absätze für den Hauptinhalt.\n"
+            "3. Schreibe Abkürzungen wie z. B., bzw., d. h., usw. und Symbole wie %, €, $ immer vollständig als Wort aus."
+        )
+
+        messages = body.get("messages", [])
+        if messages:
+            if messages[0].get("role") == "system":
+                messages[0]["content"] += instruction
+            else:
+                messages.insert(0, {"role": "system", "content": instruction})
+
+        return body
+
     async def outlet(
         self,
         body: dict,
@@ -116,6 +152,9 @@ class Filter:
         __model__: Optional[dict] = None,
     ) -> dict:
         """Outlet hook: optimizes text for 1:1 read-along TTS."""
+        if self.valves.mode == "inlet_prompt_injection":
+            return body
+
         messages = body.get("messages", [])
         if not messages:
             return body
@@ -128,9 +167,24 @@ class Filter:
         if not original_text or len(original_text.strip()) < 30:
             return body
 
-        if not self.valves.use_task_model:
+        if self.valves.debug:
+            print(f"[TTS-FILTER] Outlet triggered for model '{self.valves.task_model}' at '{self.valves.task_api_url}'")
+            print(f"[TTS-FILTER] Original message length: {len(original_text)} chars")
+
+        if self.valves.mode == "rule_based_only" or not self.valves.use_task_model:
             assistant_msg["content"] = self._rule_based_optimizer(original_text)
+            if self.valves.debug:
+                print("[TTS-FILTER] Rule-based optimization applied successfully.")
             return body
+
+        if __event_emitter__:
+            await __event_emitter__({
+                "type": "status",
+                "data": {
+                    "description": f"TTS-Optimierung mit {self.valves.task_model}...",
+                    "done": False,
+                }
+            })
 
         try:
             url = f"{self.valves.task_api_url.rstrip('/')}/chat/completions"
@@ -144,25 +198,39 @@ class Filter:
                     {"role": "system", "content": self.valves.custom_system_prompt},
                     {"role": "user", "content": original_text},
                 ],
-                "temperature": 0.1,  # Low temperature for strict 1:1 reproduction
+                "temperature": 0.1,
                 "max_tokens": 4096,
                 "stream": False,
             }
 
-            timeout = aiohttp.ClientTimeout(total=10)
+            timeout = aiohttp.ClientTimeout(total=12)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=payload) as response:
                     if response.status == 200:
                         res_json = await response.json()
                         rewritten_text = res_json["choices"][0]["message"]["content"].strip()
                         if rewritten_text:
-                            # Final sanity check & abbreviation expansion
                             assistant_msg["content"] = self._rule_based_optimizer(rewritten_text)
+                            if self.valves.debug:
+                                print(f"[TTS-FILTER SUCCESS] Rewritten length: {len(assistant_msg['content'])} chars")
                     else:
+                        error_msg = await response.text()
+                        if self.valves.debug:
+                            print(f"[TTS-FILTER ERROR] HTTP {response.status}: {error_msg}")
                         assistant_msg["content"] = self._rule_based_optimizer(original_text)
 
-        except Exception:
-            # Fallback to rule-based optimizer if task model is unreachable
+        except Exception as e:
+            if self.valves.debug:
+                print(f"[TTS-FILTER EXCEPTION] Error connecting to task model: {e}")
             assistant_msg["content"] = self._rule_based_optimizer(original_text)
+
+        if __event_emitter__:
+            await __event_emitter__({
+                "type": "status",
+                "data": {
+                    "description": "TTS-Optimierung abgeschlossen",
+                    "done": True,
+                }
+            })
 
         return body
