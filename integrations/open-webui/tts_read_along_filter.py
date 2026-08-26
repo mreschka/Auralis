@@ -1,218 +1,145 @@
 """
 title: TTS Read-Along & Paragraph Optimizer
 author: Markus
-description: Optimizes assistant responses for natural, low-latency TTS. Strips emojis, converts keycaps, preserves digits/numbers exactly, groups bullet lists in single paragraphs, expands currencies/symbols, and ensures natural speech prosody.
-version: 1.6.0
+description: Optimizes assistant responses for natural, low-latency TTS. Translates emojis to text, restructures lists via task model, and ensures natural speech prosody.
+version: 2.1.0
 license: MIT
 """
 
 from pydantic import BaseModel, Field
 from typing import Optional, Callable, Awaitable
 import aiohttp
-import json
 import re
+
+# Muss im System installiert sein: pip install emoji
+import emoji
 
 
 class Filter:
     class Valves(BaseModel):
         priority: int = Field(
             default=10,
-            description="Priority of this filter in the Open WebUI pipeline."
+            description="Priority of this filter in the Open WebUI pipeline.",
         )
         use_task_model: bool = Field(
             default=True,
-            description="Use fast LLM task model for paragraph restructuring (with deterministic fallback)."
+            description="Use fast LLM task model for paragraph restructuring.",
         )
         task_model: str = Field(
             default="gemma3:4b",
-            description="Task model name (e.g. gemma3:4b, llama3.2:3b)."
+            description="Task model name (e.g. gemma3:4b, llama3.2:3b).",
         )
         task_api_url: str = Field(
             default="http://localhost:11434/v1",
-            description="URL of the OpenAI/Ollama API endpoint (must be explicitly configured in Valves)."
+            description="URL of the OpenAI/Ollama API endpoint.",
         )
-        task_api_key: str = Field(
-            default="ollama",
-            description="API key if required."
-        )
+        task_api_key: str = Field(default="ollama", description="API key if required.")
         clean_markdown: bool = Field(
             default=True,
-            description="Strips visual Markdown formatting (**, __, code blocks, horizontal rules) for clean speech."
+            description="Strips visual Markdown formatting for clean speech.",
         )
         debug: bool = Field(
             default=True,
-            description="Enable verbose debug logs in Open WebUI server output."
+            description="Enable verbose debug logs in Open WebUI server output.",
         )
         custom_system_prompt: str = Field(
             default=(
-                "Du bist ein Text-Strukturierer für Sprachsynthese (TTS) mit 1:1-Mitlesbarkeit am Bildschirm.\n\n"
+                "Du bist ein Text-Optimierer für Sprachsynthese (TTS). WICHTIGSTE REGEL: Der Nutzer sieht den Originaltext auf dem Bildschirm und MUSS 1:1 mitlesen können! "
+                "Du darfst den Text inhaltlich nicht zusammenfassen, keine Sätze weglassen und die grundlegende visuelle Struktur (Überschriften, Zeilenumbrüche) nicht zerstören.\n\n"
                 "AUFGABEN & REGELN:\n"
-                "1. ABSATZ-STRUKTUR & LISTEN:\n"
-                "   - Beginne mit 1 bis maximal 2 kurzen Einleitungssätzen (jeweils mit doppeltem Zeilenumbruch \\n\\n abgetrennt), damit die Sprachausgabe sofort starten kann.\n"
-                "   - Fasse danach den Hauptteil in längeren, natürlichen Absätzen zusammen.\n"
-                "   - Halte Aufzählungen und Listenpunkte innerhalb desselben Absatzes zusammen (kein \\n\\n zwischen Listenpunkten).\n"
-                "2. ZAHLEN & DATEN (STRIKT):\n"
-                "   - Belasse alle Zahlen, Jahreszahlen, Versionsnummern, IP-Adressen und Datumsangaben IMMER als Ziffern (z. B. 2026, 3.12, 192.168.1.1, 15. April). Schreibe Zahlen NIEMALS in Worten aus!\n"
-                "3. EMOJIS & SONDERZEICHEN (STRIKT):\n"
-                "   - Entferne alle visuellen Deko-Emojis (wie 🎤, 🎧, 😃, 😢, 😎, 🐱, 🚀, 🍕, 🌟, 🌍, 🧠, 🐢) restlos aus dem Text. Es dürfen KEINE rohen Emojis im Text verbleiben!\n"
-                "   - Wandle Keycap-Zahlen (1️⃣, 2️⃣) in normale Ziffern um (1., 2.).\n"
-                "   - Ersetze funktionale Symbole phonetisch (z. B. ⚡ -> Blitz-Symbol, 💡 -> Glühbirnen-Symbol, ✓ -> Häkchen, ✗ -> Kreuz, → -> Pfeil zu).\n"
-                "4. WÄHRUNGEN & ABKÜRZUNGEN:\n"
-                "   - Währungen nach dem Betrag ausschreiben (z. B. '1 250 000 Euro', '850 000 Dollar', '750 000 Pfund').\n"
-                "   - Symbole & Einheiten ausschreiben (z. B. '%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
-                "   - Abkürzungen ausschreiben (z. B. 'z. B.' -> 'zum Beispiel', 'd. h.' -> 'das heißt', 'bzw.' -> 'beziehungsweise', 'ca.' -> 'circa', 'usw.' -> 'und so weiter', 'ms' -> 'Millisekunden').\n"
-                "   - Satzzeichen (Punkt, Komma, Doppelpunkt) NIEMALS als Wörter buchstabieren.\n"
-                "5. Gib ausschließlich den formatierten Originaltext aus, ohne jede Einleitung oder Erklärung."
+                "1. STRUKTUR & MITLESBARKEIT:\n"
+                "   - Behalte den genauen Wortlaut so weit wie möglich bei.\n"
+                "   - Überschriften und nummerierte Listen (1., 2.) bleiben als Struktur erhalten. Erhalte die Absätze.\n"
+                "2. LISTEN & BULLET-POINTS TTS-FREUNDLICH MACHEN:\n"
+                "   - Entferne unlesbare Aufzählungszeichen wie Spiegelstriche (-), Sternchen (*) oder Rauten (#) am Zeilenanfang ersatzlos.\n"
+                "   - Hänge an das Ende von kurzen Listenpunkten einen Punkt (.), damit die TTS-Engine eine natürliche Atempause macht.\n"
+                "3. ZAHLEN & DATEN (STRIKT):\n"
+                "   - Belasse alle Zahlen, Jahreszahlen (z.B. 2026) und Daten als Ziffern. Niemals als Text ausschreiben!\n"
+                "4. EMOJIS & SYMBOLE:\n"
+                "   - Emojis wurden bereits vom System in Text übersetzt (z.B. 'Lachendes Gesicht'). Lass diese Wörter im Text stehen, sie sollen mitgelesen werden.\n"
+                "   - Ersetze funktionale Symbole (->, =>, ≈) durch passende Wörter im Kontext (z.B. 'entspricht', 'steht für', 'bedeutet'). Nicht wörtlich als 'Pfeil' übersetzen.\n"
+                "5. WÄHRUNGEN & ABKÜRZUNGEN:\n"
+                "   - Schreibe Einheiten aus ('€' -> 'Euro', '%' -> 'Prozent', 'Mio' -> 'Millionen').\n"
+                "   - Schreibe Abkürzungen aus ('z. B.', 'bzw.', 'ca.').\n"
+                "6. Gib ausschließlich den optimierten Text aus, ohne jede Einleitung, Bestätigung oder Erklärung."
             ),
-            description="System prompt for the task model."
+            description="System prompt for the task model.",
         )
 
     def __init__(self):
         self.valves = self.Valves()
 
-    def _sanitize_and_clean(self, text: str) -> str:
+    def _sanitize_and_clean(self, text: str, user_lang: str = "de") -> str:
         """Deterministic phonetic, emoji and markdown sanitizer."""
-        # 1. Clean keycap numbers 1️⃣ -> 1., 2️⃣ -> 2., etc.
+
+        # 1. Clean keycaps (behalten wir, damit '1.' und nicht 'Taste 1' vorgelesen wird)
         keycaps = {
-            '1️⃣': '1.', '2️⃣': '2.', '3️⃣': '3.', '4️⃣': '4.', '5️⃣': '5.',
-            '6️⃣': '6.', '7️⃣': '7.', '8️⃣': '8.', '9️⃣': '9.', '🔟': '10.',
-            '0️⃣': '0.', '1\ufe0f\u20e3': '1.', '2\ufe0f\u20e3': '2.', '3\ufe0f\u20e3': '3.',
-            '4\ufe0f\u20e3': '4.', '5\ufe0f\u20e3': '5.', '6\ufe0f\u20e3': '6.', '7\ufe0f\u20e3': '7.',
-            '8\ufe0f\u20e3': '8.', '9\ufe0f\u20e3': '9.', '🔟\ufe0f': '10.',
-            '#️⃣': '#', '*️⃣': '*'
+            "1️⃣": "1.",
+            "2️⃣": "2.",
+            "3️⃣": "3.",
+            "4️⃣": "4.",
+            "5️⃣": "5.",
+            "6️⃣": "6.",
+            "7️⃣": "7.",
+            "8️⃣": "8.",
+            "9️⃣": "9.",
+            "🔟": "10.",
+            "0️⃣": "0.",
+            "1\ufe0f\u20e3": "1.",
+            "2\ufe0f\u20e3": "2.",
+            "3\ufe0f\u20e3": "3.",
+            "4\ufe0f\u20e3": "4.",
+            "5\ufe0f\u20e3": "5.",
+            "6\ufe0f\u20e3": "6.",
+            "7\ufe0f\u20e3": "7.",
+            "8\ufe0f\u20e3": "8.",
+            "9\ufe0f\u20e3": "9.",
+            "🔟\ufe0f": "10.",
+            "#️⃣": "#",
+            "*️⃣": "*",
         }
         for k, v in keycaps.items():
             text = text.replace(k, v)
 
-        # 2. Named functional symbols
-        named_symbols = [
-            (r'⚡', ' Blitz-Symbol '),
-            (r'💡', ' Glühbirnen-Symbol '),
-            (r'[✓✔]', ' Häkchen '),
-            (r'[✗✖❌]', ' Kreuz '),
-            (r'©', ' Copyright '),
-            (r'™', ' Trademark '),
-            (r'®', ' Registered '),
-            (r'->|➔|→', ' Pfeil zu '),
-            (r'#([A-Za-z0-9äöüÄÖÜ_]+)', r'Hashtag \1'),
-            (r'&\s*Co\.', 'und Co.'),
-            (r'\b&\b', 'und'),
-        ]
-        for pattern, repl in named_symbols:
-            text = re.sub(pattern, repl, text)
+        # 2. Emojis per Library in Text übersetzen
+        try:
+            text = emoji.demojize(text, language=user_lang)
+        except Exception as e:
+            if self.valves.debug:
+                print(
+                    f"[TTS-FILTER] Emoji language '{user_lang}' not supported, fallback to 'en'. Error: {e}"
+                )
+            text = emoji.demojize(text, language="en")
 
-        # 3. Universal Emoji & Pictograph Stripping
-        emoji_pattern = re.compile(
-            "["
-            "\U0001F600-\U0001F64F"  # Emoticons
-            "\U0001F300-\U0001F5FF"  # Misc Symbols & Pictographs (earth, cat, rocket, pizza, star, etc.)
-            "\U0001F680-\U0001F6FF"  # Transport & Map
-            "\U0001F700-\U0001F77F"  # Alchemical Symbols
-            "\U0001F780-\U0001F7FF"  # Geometric Shapes
-            "\U0001F800-\U0001F8FF"  # Supplemental Arrows
-            "\U0001F900-\U0001F9FF"  # Supplemental Symbols (brain, turtle, etc.)
-            "\U0001FA00-\U0001FA6F"  # Chess Symbols
-            "\U0001FA70-\U0001FAFF"  # Symbols & Pictographs Extended
-            "\U00002702-\U000027B0"  # Dingbats
-            "\U000024C2-\U0001F251"  # Enclosed Characters
-            "\U0001F004-\U0001F0CF"  # Playing cards / Mahjong
-            "\U00002600-\U000026FF"  # Misc Symbols
-            "\U00002B00-\U00002BFF"  # Misc Symbols & Arrows
-            "\U0000FE00-\U0000FE0F"  # Variation Selectors
-            "\U000020D0-\U000020FF"  # Combining Diacritical Marks for Symbols
-            "]+",
-            flags=re.UNICODE
+        # Die Library macht aus 🚀 -> :Rakete: oder :rocket:
+        # Wir entfernen die Doppelpunkte und ersetzen Unterstriche durch Leerzeichen für sauberes TTS
+        text = re.sub(
+            r":([a-zA-Z0-9äöüÄÖÜß_]+):",
+            lambda m: " " + m.group(1).replace("_", " ") + " ",
+            text,
         )
-        text = emoji_pattern.sub('', text)
 
-        # 4. Clean markdown headers and horizontal rules
-        text = re.sub(r'^\s*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+        # 3. Sonderzeichen für TTS bereinigen (verhindert, dass das LLM sie kopiert)
+        text = text.replace("→", " bedeutet ")
+        text = text.replace("≈", " ungefähr ")
+        text = text.replace("=>", " daraus folgt ")
 
-        # 5. Strip inline markdown styling (bold, italic, code)
+        # 4. Clean markdown headers, blockquotes, and horizontal rules
+        text = re.sub(r"^\s*[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+        text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+        text = re.sub(r"^\s*>\s*", "", text, flags=re.MULTILINE)
+
+        # 5. Strip inline markdown styling (ohne Mathe-Operatoren zu killen!)
         if self.valves.clean_markdown:
-            text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-            text = re.sub(r'\*([^*]+)\*', r'\1', text)
-            text = re.sub(r'__([^_]+)__', r'\1', text)
-            text = re.sub(r'_([^_]+)_', r'\1', text)
-            text = re.sub(r'`([^`]+)`', r'\1', text)
+            text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+            # Entfernt Kursiv-Sternchen NUR, wenn kein Leerzeichen direkt daneben steht
+            text = re.sub(r"\*(?!\s)([^*]+?)(?<!\s)\*", r"\1", text)
+            text = re.sub(r"`([^`]+)`", r"\1", text)
 
-        # 6. Currencies: Move currency symbol AFTER digits/scale words, keeping digits intact
-        scale_units = r'(?:\s*(?:million|billion|trillion|mio|mrd|millionen|milliarden|tausend|thousand))?'
-        text = re.sub(r'€\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Euro', text, flags=re.IGNORECASE)
-        text = re.sub(r'\$\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Dollar', text, flags=re.IGNORECASE)
-        text = re.sub(r'£\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Pfund', text, flags=re.IGNORECASE)
-        text = re.sub(r'¥\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Yen', text, flags=re.IGNORECASE)
-        text = re.sub(r'€', ' Euro ', text)
-        text = re.sub(r'\$', ' Dollar ', text)
-        text = re.sub(r'£', ' Pfund ', text)
-        text = re.sub(r'¥', ' Yen ', text)
-
-        # 7. Units & Percent
-        text = re.sub(r'%\s*', ' Prozent ', text)
-        text = re.sub(r'°\s*C\b', ' Grad Celsius', text)
-        text = re.sub(r'°\s*F\b', ' Grad Fahrenheit', text)
-        text = re.sub(r'§\s*', ' Paragraph ', text)
-
-        # 8. Common abbreviations
-        abbreviations = [
-            (r'\bz\.B\.', 'zum Beispiel'),
-            (r'\bz\.\s*B\.', 'zum Beispiel'),
-            (r'\bd\.h\.', 'das heißt'),
-            (r'\bd\.\s*h\.', 'das heißt'),
-            (r'\bu\.a\.', 'unter anderem'),
-            (r'\bu\.\s*a\.', 'unter anderem'),
-            (r'\bbzw\.', 'beziehungsweise'),
-            (r'\bca\.', 'circa'),
-            (r'\busw\.', 'und so weiter'),
-            (r'\bevtl\.', 'eventuell'),
-            (r'\bggf\.', 'gegebenenfalls'),
-            (r'\bDr\.', 'Doktor'),
-            (r'\bProf\.', 'Professor'),
-            (r'\bNr\.', 'Nummer'),
-            (r'\bvs\.', 'versus'),
-            (r'\be\.g\.', 'for example'),
-            (r'\bi\.e\.', 'that is'),
-            (r'\betc\.', 'et cetera'),
-            (r'\bms\b', 'Millisekunden'),
-            (r'\bkm/h\b', 'Kilometer pro Stunde'),
-        ]
-        for pattern, repl in abbreviations:
-            text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
-
-        # 9. Normalize spaces
-        text = text.replace('\u202f', ' ').replace('\u00a0', ' ')
-        text = re.sub(r'[ \t]+', ' ', text)
-
-        # 10. List items: Keep bullet items together in single paragraph
-        lines = text.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            l = line.strip()
-            if not l:
-                if cleaned_lines and cleaned_lines[-1] != '':
-                    cleaned_lines.append('')
-                continue
-            cleaned_lines.append(l)
-        
-        text = '\n'.join(cleaned_lines)
-
-        # 11. Paragraph Pacing: Split only the first 1-2 introductory sentences
-        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-        if paragraphs:
-            first_para = paragraphs[0]
-            if not first_para.startswith(('-', '•', '1.', '2.', '3.')):
-                sents = re.split(r'(?<=[.!?])\s+(?=[A-ZÄÖÜ„"])', first_para)
-                if len(sents) >= 3:
-                    new_start = [sents[0], sents[1]]
-                    remainder = " ".join(sents[2:])
-                    if remainder:
-                        new_start.append(remainder)
-                    paragraphs = new_start + paragraphs[1:]
-                elif len(sents) == 2:
-                    paragraphs = [sents[0], sents[1]] + paragraphs[1:]
-            
-            text = "\n\n".join(paragraphs)
+        # 6. Leerzeichen normalisieren und Absätze auf max. 2 Umbrüche begrenzen
+        text = text.replace("\u202f", " ").replace("\u00a0", " ")
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
 
         return text.strip()
 
@@ -236,26 +163,66 @@ class Filter:
         if not original_text or len(original_text.strip()) < 30:
             return body
 
+        # Sprachende-Erkennung aus Open WebUI __user__
+        user_lang = "de"
+        if __user__:
+            try:
+                # Open WebUI speichert das typischerweise als 'de-DE' oder 'en-US'
+                raw_lang = (
+                    __user__.get("settings", {}).get("ui", {}).get("language", "")
+                )
+                if not raw_lang:
+                    # Fallback für ältere Open WebUI Versionen
+                    raw_lang = __user__.get("ui", {}).get("language", "")
+
+                if raw_lang:
+                    # Holt sich nur den ersten Teil (z.B. 'de' aus 'de-DE')
+                    user_lang = raw_lang.split("-")[0].lower()
+            except Exception:
+                pass
+
+        # Validierung, ob die Sprache von der emoji Library unterstützt wird
+        supported_emoji_langs = [
+            "en",
+            "es",
+            "pt",
+            "it",
+            "fr",
+            "de",
+            "ja",
+            "ko",
+            "zh",
+            "ru",
+            "ar",
+        ]
+        if user_lang not in supported_emoji_langs:
+            user_lang = "de"
+
         if self.valves.debug:
-            print(f"[TTS-FILTER] Outlet triggered for model '{self.valves.task_model}' at '{self.valves.task_api_url}'")
-            print(f"[TTS-FILTER] Original message length: {len(original_text)} chars")
+            print(f"[TTS-FILTER] Outlet triggered for model '{self.valves.task_model}'")
+            print(f"[TTS-FILTER] Detected user language for Emojis: {user_lang}")
 
         if not self.valves.use_task_model:
-            assistant_msg["content"] = self._sanitize_and_clean(original_text)
-            if self.valves.debug:
-                print("[TTS-FILTER] Rule-based optimization applied successfully.")
+            assistant_msg["content"] = self._sanitize_and_clean(
+                original_text, user_lang
+            )
             return body
 
         if __event_emitter__:
-            await __event_emitter__({
-                "type": "status",
-                "data": {
-                    "description": f"TTS-Optimierung mit {self.valves.task_model}...",
-                    "done": False,
+            await __event_emitter__(
+                {
+                    "type": "status",
+                    "data": {
+                        "description": f"TTS-Optimierung mit {self.valves.task_model}...",
+                        "done": False,
+                    },
                 }
-            })
+            )
 
         try:
+            # Markdown und Emojis strippen/übersetzen, bevor es ans Task-Modell geht
+            pre_cleaned_text = self._sanitize_and_clean(original_text, user_lang)
+
             url = f"{self.valves.task_api_url.rstrip('/')}/chat/completions"
             headers = {
                 "Content-Type": "application/json",
@@ -265,7 +232,7 @@ class Filter:
                 "model": self.valves.task_model,
                 "messages": [
                     {"role": "system", "content": self.valves.custom_system_prompt},
-                    {"role": "user", "content": original_text},
+                    {"role": "user", "content": pre_cleaned_text},
                 ],
                 "temperature": 0.1,
                 "max_tokens": 4096,
@@ -277,29 +244,37 @@ class Filter:
                 async with session.post(url, headers=headers, json=payload) as response:
                     if response.status == 200:
                         res_json = await response.json()
-                        rewritten_text = res_json["choices"][0]["message"]["content"].strip()
+                        rewritten_text = res_json["choices"][0]["message"][
+                            "content"
+                        ].strip()
                         if rewritten_text:
-                            assistant_msg["content"] = self._sanitize_and_clean(rewritten_text)
-                            if self.valves.debug:
-                                print(f"[TTS-FILTER SUCCESS] Rewritten length: {len(assistant_msg['content'])} chars")
+                            # Whitespaces nach dem LLM sicherheitshalber nochmal normalisieren
+                            assistant_msg["content"] = self._sanitize_and_clean(
+                                rewritten_text, user_lang
+                            )
                     else:
-                        error_msg = await response.text()
                         if self.valves.debug:
-                            print(f"[TTS-FILTER ERROR] HTTP {response.status}: {error_msg}")
-                        assistant_msg["content"] = self._sanitize_and_clean(original_text)
+                            print(
+                                f"[TTS-FILTER ERROR] HTTP {response.status}: {await response.text()}"
+                            )
+                        assistant_msg["content"] = pre_cleaned_text
 
         except Exception as e:
             if self.valves.debug:
                 print(f"[TTS-FILTER EXCEPTION] Error connecting to task model: {e}")
-            assistant_msg["content"] = self._sanitize_and_clean(original_text)
+            assistant_msg["content"] = self._sanitize_and_clean(
+                original_text, user_lang
+            )
 
         if __event_emitter__:
-            await __event_emitter__({
-                "type": "status",
-                "data": {
-                    "description": "TTS-Optimierung abgeschlossen",
-                    "done": True,
+            await __event_emitter__(
+                {
+                    "type": "status",
+                    "data": {
+                        "description": "TTS-Optimierung abgeschlossen",
+                        "done": True,
+                    },
                 }
-            })
+            )
 
         return body
