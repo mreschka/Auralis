@@ -35,13 +35,10 @@ graph TD
 
 ---
 
-## 🚀 Prerequisites & Installation in Open WebUI
+## 🚀 Setup & Installation in Open WebUI
 
-### Prerequisite: `emoji` Library
-Inside the Open WebUI environment / container, install the `emoji` package:
-```bash
-pip install emoji
-```
+> [!TIP]
+> The `emoji` library is already pre-installed in standard Open WebUI container images, so no manual package installation is required.
 
 ### Step 1: Import the Filter Function
 1. In Open WebUI, navigate to **Workspace ➔ Functions** (or **Admin Panel ➔ Functions**).
