@@ -63,7 +63,8 @@ setup(
         "vllm==0.6.4.post1",
         "nvidia-ml-py",
         "numpy",
-        "langid"
+        "langid",
+        "emoji>=2.14.0"
 
     ],
     extras_require={

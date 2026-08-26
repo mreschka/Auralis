@@ -137,6 +137,7 @@ class AudioSpeechGenerationRequest(BaseModel):
     speed: float = Field(default=1.0, description="Speech speed")
 
     enhance_speech: bool = Field(default=tts_defaults['enhance_speech'])
+    normalize: Optional[bool] = Field(default=None, description="Enable or disable text normalization/phonetization for this request")
     language: str = Field(default='de')
     max_ref_length: int = Field(default=tts_defaults['max_ref_length'])
     gpt_cond_len: int = Field(default=tts_defaults['gpt_cond_len'])

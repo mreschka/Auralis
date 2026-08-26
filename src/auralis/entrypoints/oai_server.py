@@ -15,9 +15,13 @@ from starlette.responses import StreamingResponse
 
 from auralis.core.tts import TTS
 from auralis.common.definitions.openai import VoiceChatCompletionRequest, AudioSpeechGenerationRequest
+from auralis.common.logging.logger import setup_logger
+from auralis.common.normalizer import TextNormalizer
 
-# Global TTS engine instance
+# Global TTS engine instance and logger
 tts_engine: Optional[TTS] = None
+logger = setup_logger(__file__)
+normalizer = TextNormalizer()
 
 logger_str_to_logging = {
     'info': logging.INFO,
@@ -26,7 +30,12 @@ logger_str_to_logging = {
 }
 
 def start_tts_engine(args: argparse.Namespace, logging_level: int):
-    global tts_engine
+    global tts_engine, normalizer
+    if hasattr(args, 'enable_normalizer') and args.enable_normalizer is not None:
+        normalizer.enabled = args.enable_normalizer
+    if hasattr(args, 'normalizer_lang') and args.normalizer_lang is not None:
+        normalizer.default_lang = args.normalizer_lang
+
     tts_engine = (TTS(
         vllm_logging_level=logging_level
     ).from_pretrained(
@@ -43,7 +52,9 @@ async def lifecycle_manager(app: FastAPI):
             model='/app/models/xttsv2',
             gpt_model='/app/models/xtts2-gpt',
             max_concurrency=8,
-            vllm_logging_level='warn'
+            vllm_logging_level='warn',
+            enable_normalizer=os.getenv("AURALIS_ENABLE_NORMALIZER", "true").lower() in ("true", "1", "yes"),
+            normalizer_lang=os.getenv("AURALIS_NORMALIZER_LANG", "de")
         )
         logging_level = logger_str_to_logging.get(args.vllm_logging_level, logging.WARNING)
         start_tts_engine(args, logging_level)
@@ -98,6 +109,12 @@ async def generate_audio(request: AudioSpeechGenerationRequest):
         raise HTTPException(status_code=500, detail="TTS engine not initialized")
 
     try:
+        raw_text = request.input
+        should_normalize = request.normalize if request.normalize is not None else normalizer.enabled
+        if should_normalize:
+            request.input = normalizer.normalize(raw_text, lang=request.language)
+            logger.info(f"[NORMALIZER] Input: '{raw_text}' -> Output: '{request.input}'")
+
         tts_request = request.to_tts_request()
         output = await tts_engine.generate_speech_async(tts_request)
         if request.speed != 1.0:
@@ -179,7 +196,10 @@ async def chat_completions(request: VoiceChatCompletionRequest, authorization: O
 
                                     if len(accumulated_content.split()) >= num_of_token_to_vocalize:
                                         if 'audio' in modalities:
-                                            tts_request.text = accumulated_content
+                                            chunk_text = normalizer.normalize(accumulated_content, lang=request.language) if normalizer.enabled else accumulated_content
+                                            if normalizer.enabled:
+                                                logger.info(f"[NORMALIZER] Chat Chunk: '{accumulated_content}' -> Output: '{chunk_text}'")
+                                            tts_request.text = chunk_text
                                             tts_request.infer_language()
                                             audio_output = await tts_engine.generate_speech_async(tts_request)
                                             audio_base64 = base64.b64encode(audio_output.to_bytes()).decode("utf-8")
@@ -193,7 +213,10 @@ async def chat_completions(request: VoiceChatCompletionRequest, authorization: O
                                 continue
 
                 if accumulated_content and 'audio' in modalities:
-                    tts_request.text = accumulated_content
+                    chunk_text = normalizer.normalize(accumulated_content, lang=request.language) if normalizer.enabled else accumulated_content
+                    if normalizer.enabled:
+                        logger.info(f"[NORMALIZER] Final Chat Chunk: '{accumulated_content}' -> Output: '{chunk_text}'")
+                    tts_request.text = chunk_text
                     tts_request.infer_language()
                     audio_output = await tts_engine.generate_speech_async(tts_request)
                     audio_base64 = base64.b64encode(audio_output.to_bytes()).decode("utf-8")
@@ -219,6 +242,8 @@ def main():
     parser.add_argument("--gpt_model", type=str, default='/app/models/xtts2-gpt', help="The gpt model to load alongside the base model, if present")
     parser.add_argument("--max_concurrency", type=int, default=8, help="The concurrency value that is used in the TTS Engine")
     parser.add_argument("--vllm_logging_level", type=str, default='warn', help="The vllm logging level")
+    parser.add_argument("--enable_normalizer", type=lambda x: (str(x).lower() in ['true', '1', 'yes']), default=os.getenv("AURALIS_ENABLE_NORMALIZER", "true").lower() in ("true", "1", "yes"), help="Enable text normalization and phonetic pre-processing")
+    parser.add_argument("--normalizer_lang", type=str, default=os.getenv("AURALIS_NORMALIZER_LANG", "de"), help="Default language for text normalizer")
 
     args = parser.parse_args()
 
