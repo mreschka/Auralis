@@ -1,8 +1,8 @@
 """
 title: TTS Read-Along & Paragraph Optimizer
 author: Markus
-description: Optimizes responses for real-time live-streaming TTS (Open WebUI auto-play / call mode). Formats sentences into short initial paragraphs, expands currencies, symbols, emojis, and abbreviations directly in the stream.
-version: 1.3.0
+description: Optimizes assistant responses for natural, low-latency TTS. Preserves digits/numbers exactly, groups bullet lists in single paragraphs, expands currencies/symbols/emojis, and ensures natural speech prosody.
+version: 1.4.0
 license: MIT
 """
 
@@ -37,29 +37,29 @@ class Filter:
         )
         clean_markdown: bool = Field(
             default=True,
-            description="Use Markdown-aware cleaning (via markdown + BeautifulSoup) to strip visual markdown artifacts."
+            description="Strips visual Markdown formatting (**, __, code blocks, horizontal rules) for clean TTS speech."
         )
         debug: bool = Field(
             default=True,
-            description="Enable verbose debug logs in Open WebUI server output and UI status badges."
+            description="Enable verbose debug logs in Open WebUI server output."
         )
         custom_system_prompt: str = Field(
             default=(
                 "Du bist ein phonetischer Formatierer für Sprachsynthese mit 1:1-Mitlesbarkeit am Bildschirm.\n\n"
                 "STRIKTE REGELN:\n"
-                "1. KEINE INHALTSÄNDERUNG: Ändere keine Sätze, formuliere nichts um, erfinde nichts hinzu und lasse nichts weg. Der Nutzer liest den Text beim Hören am Bildschirm mit!\n"
-                "2. ABSATZ-STRUKTUR (für Sofort-Wiedergabe in Open WebUI):\n"
-                "   - Trenne den 1. Satz als eigenen kurzen Absatz mit doppeltem Zeilenumbruch (\\n\\n) ab.\n"
-                "   - Trenne den 2. Satz als eigenen kurzen Absatz mit doppeltem Zeilenumbruch (\\n\\n) ab.\n"
-                "   - Trenne den 3. Satz als eigenen kurzen Absatz mit doppeltem Zeilenumbruch (\\n\\n) ab.\n"
-                "   - Der verbleibende Haupttext bleibt in seinen normalen, zusammenhängenden Absätzen.\n"
-                "3. SPRECHBARKEIT & PHONETIK:\n"
+                "1. KEINE INHALTSÄNDERUNG: Ändere keine Formulierungen und formuliere nichts um. Der Nutzer liest den Text beim Hören am Bildschirm mit!\n"
+                "2. ZAHLEN & DATEN ALS ZIFFERN BELASSEN: Schreibe Zahlen, Jahreszahlen, Versionsnummern, IP-Adressen und Datumsangaben NIEMALS als Wörter aus! Belasse sie immer als Ziffern (z. B. 2026, 3.12, 192.168.1.1, 15. April).\n"
+                "3. ABSATZ-STRUKTUR & LISTEN:\n"
+                "   - Beginne mit 1 bis maximal 2 kurzen Einleitungssätzen (jeweils mit doppeltem Zeilenumbruch \\n\\n abgetrennt), damit die Sprachausgabe sofort starten kann.\n"
+                "   - Halte den Hauptteil in längeren, gehaltvollen Absätzen zusammen.\n"
+                "   - Halte Aufzählungen und Listenpunkte innerhalb desselben Absatzes zusammen (nur einfacher Zeilenumbruch \\n, KEIN doppelter \\n\\n zwischen Listenpunkten).\n"
+                "4. SPRECHBARKEIT & PHONETIK:\n"
                 "   - Währungen nach dem Betrag ausschreiben ('€ 1 250 000' -> '1 250 000 Euro', '$ 3.7 billion' -> '3.7 billion Dollar', '£ 750 000' -> '750 000 Pfund').\n"
                 "   - Symbole & Einheiten ausschreiben ('%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
-                "   - Emojis & Sonderzeichen ausschreiben ('⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '©' -> 'Copyright', '™' -> 'Trademark', '#Thema' -> 'Hashtag Thema').\n"
+                "   - Emojis & Sonderzeichen als Wort ausschreiben ('⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '©' -> 'Copyright', '™' -> 'Trademark', '#Thema' -> 'Hashtag Thema').\n"
                 "   - Abkürzungen ausschreiben ('z. B.' -> 'zum Beispiel', 'd. h.' -> 'das heißt', 'bzw.' -> 'beziehungsweise', 'ca.' -> 'circa', 'usw.' -> 'und so weiter', 'ms' -> 'Millisekunden').\n"
-                "   - Nummerierte Listenpunkte fließend formatieren ('1.' -> 'Erstens:', '2.' -> 'Zweitens:', '3.' -> 'Drittens:').\n"
-                "4. Gib ausschließlich den formatierten Originaltext aus, ohne jede Einleitung oder Begleittext."
+                "   - Satzzeichen (Punkt, Komma, Doppelpunkt) NIEMALS als Wörter buchstabieren, sondern als normale Satzzeichen belassen.\n"
+                "5. Gib ausschließlich den formatierten Originaltext aus, ohne Einleitung oder Begleittext."
             ),
             description="System prompt for the 1:1 read-along TTS optimizer (used in outlet mode)."
         )
@@ -68,25 +68,38 @@ class Filter:
         self.valves = self.Valves()
 
     def _sanitize_and_clean(self, text: str) -> str:
-        """Two-tier sanitizer: Phonetic expansions + Markdown-aware structural cleaning."""
-        # 1. Phonetic expansions: Currencies with numbers and scale units
+        """Deterministic, high-fidelity phonetic and markdown sanitizer."""
+        # 1. Clean markdown headers and horizontal rules
+        text = re.sub(r'^\s*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+
+        # 2. Strip inline markdown styling (bold, italic, code) without destroying text
+        if self.valves.clean_markdown:
+            text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+            text = re.sub(r'\*([^*]+)\*', r'\1', text)
+            text = re.sub(r'__([^_]+)__', r'\1', text)
+            text = re.sub(r'_([^_]+)_', r'\1', text)
+            text = re.sub(r'`([^`]+)`', r'\1', text)
+
+        # 3. Currencies: Move currency symbol AFTER digits/scale words, keeping DIGITS UNTOUCHED
         scale_units = r'(?:\s*(?:million|billion|trillion|mio|mrd|millionen|milliarden|tausend|thousand))?'
-        text = re.sub(r'€\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Euro ', text, flags=re.IGNORECASE)
-        text = re.sub(r'\$\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Dollar ', text, flags=re.IGNORECASE)
-        text = re.sub(r'£\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Pfund ', text, flags=re.IGNORECASE)
-        text = re.sub(r'¥\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Yen ', text, flags=re.IGNORECASE)
+        text = re.sub(r'€\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Euro', text, flags=re.IGNORECASE)
+        text = re.sub(r'\$\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Dollar', text, flags=re.IGNORECASE)
+        text = re.sub(r'£\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Pfund', text, flags=re.IGNORECASE)
+        text = re.sub(r'¥\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Yen', text, flags=re.IGNORECASE)
+        # Standalone currency symbols
         text = re.sub(r'€', ' Euro ', text)
         text = re.sub(r'\$', ' Dollar ', text)
         text = re.sub(r'£', ' Pfund ', text)
         text = re.sub(r'¥', ' Yen ', text)
 
-        # 2. Units & Percent
+        # 4. Units & Percent (keep numbers as digits!)
         text = re.sub(r'%\s*', ' Prozent ', text)
         text = re.sub(r'°\s*C\b', ' Grad Celsius', text)
         text = re.sub(r'°\s*F\b', ' Grad Fahrenheit', text)
         text = re.sub(r'§\s*', ' Paragraph ', text)
 
-        # 3. Common Emojis & Symbols
+        # 5. Common Emojis & Symbols
         symbols = [
             (r'⚡', ' Blitz-Symbol '),
             (r'💡', ' Glühbirnen-Symbol '),
@@ -98,12 +111,12 @@ class Filter:
             (r'->|➔|→', ' Pfeil zu '),
             (r'#([A-Za-z0-9äöüÄÖÜ_]+)', r'Hashtag \1'),
             (r'&\s*Co\.', 'und Co.'),
-            (r'&', ' und '),
+            (r'\b&\b', 'und'),
         ]
         for pattern, repl in symbols:
             text = re.sub(pattern, repl, text)
 
-        # 4. Common abbreviations
+        # 6. Abbreviations (expand only abbreviations, never touch digits/punctuation)
         abbreviations = [
             (r'\bz\.B\.', 'zum Beispiel'),
             (r'\bz\.\s*B\.', 'zum Beispiel'),
@@ -129,75 +142,41 @@ class Filter:
         for pattern, repl in abbreviations:
             text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
 
-        # 5. Markdown-aware cleaning
-        if self.valves.clean_markdown:
-            try:
-                import markdown
-                from bs4 import BeautifulSoup
+        # 7. Normalize spaces and narrow non-breaking spaces
+        text = text.replace('\u202f', ' ').replace('\u00a0', ' ')
+        text = re.sub(r'[ \t]+', ' ', text)
 
-                html_content = markdown.markdown(text, extensions=['extra', 'nl2br', 'sane_lists'])
-                soup = BeautifulSoup(html_content, 'html.parser')
+        # 8. List items formatting: Keep list items together within the same paragraph
+        lines = text.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            l = line.strip()
+            if not l:
+                if cleaned_lines and cleaned_lines[-1] != '':
+                    cleaned_lines.append('')
+                continue
+            cleaned_lines.append(l)
+        
+        text = '\n'.join(cleaned_lines)
 
-                # Format ordered list items
-                for ol in soup.find_all('ol'):
-                    for i, li in enumerate(ol.find_all('li', recursive=False), 1):
-                        labels = {1: "Erstens:", 2: "Zweitens:", 3: "Drittens:", 4: "Viertens:", 5: "Fünftens:"}
-                        label = labels.get(i, f"Punkt {i}:")
-                        li.insert_before(f'\n{label} ')
-                        li.unwrap()
-                    ol.unwrap()
-
-                # Format unordered list items
-                for ul in soup.find_all('ul'):
-                    for li in ul.find_all('li', recursive=False):
-                        li.insert_before('\n- ')
-                        li.unwrap()
-                    ul.unwrap()
-
-                # Separate block elements
-                for block in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'blockquote']):
-                    block.insert_after('\n\n')
-                    block.unwrap()
-
-                cleaned_text = soup.get_text()
-            except Exception:
-                # Deterministic Regex fallback
-                cleaned_text = re.sub(r'^\s*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
-                cleaned_text = re.sub(r'^#+\s*', '', cleaned_text, flags=re.MULTILINE)
-                cleaned_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', cleaned_text)
-                cleaned_text = re.sub(r'\*([^*]+)\*', r'\1', cleaned_text)
-                cleaned_text = re.sub(r'__([^_]+)__', r'\1', cleaned_text)
-                cleaned_text = re.sub(r'_([^_]+)_', r'\1', cleaned_text)
-                cleaned_text = re.sub(r'`([^`]+)`', r'\1', cleaned_text)
-                cleaned_text = re.sub(r'^\s*1\.\s*', 'Erstens: ', cleaned_text, flags=re.MULTILINE)
-                cleaned_text = re.sub(r'^\s*2\.\s*', 'Zweitens: ', cleaned_text, flags=re.MULTILINE)
-                cleaned_text = re.sub(r'^\s*3\.\s*', 'Drittens: ', cleaned_text, flags=re.MULTILINE)
-                cleaned_text = re.sub(r'^\s*4\.\s*', 'Viertens: ', cleaned_text, flags=re.MULTILINE)
-                cleaned_text = re.sub(r'^\s*5\.\s*', 'Fünftens: ', cleaned_text, flags=re.MULTILINE)
-        else:
-            cleaned_text = text
-
-        # 6. Normalize whitespaces
-        cleaned_text = cleaned_text.replace('\u202f', ' ').replace('\u00a0', ' ')
-        cleaned_text = re.sub(r'[ \t]+', ' ', cleaned_text)
-        cleaned_text = re.sub(r'\n{3,}', '\n\n', cleaned_text)
-
-        # 7. Split first 2-3 sentences into distinct short paragraphs for instant TTFT (< 1s)
-        paragraphs = [p.strip() for p in cleaned_text.split('\n\n') if p.strip()]
+        # 9. Paragraph Pacing: Split first 1-2 introductory sentences, keep everything else intact
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         if paragraphs:
             first_para = paragraphs[0]
-            sents = re.split(r'(?<=[.!?])\s+(?=[A-ZÄÖÜ0-9„"])', first_para)
-            if len(sents) >= 3:
-                new_start = [sents[0], sents[1]]
-                remainder = " ".join(sents[2:])
-                if remainder:
-                    new_start.append(remainder)
-                paragraphs = new_start + paragraphs[1:]
-            elif len(sents) == 2:
-                paragraphs = [sents[0], sents[1]] + paragraphs[1:]
-            cleaned_text = "\n\n".join(paragraphs)
+            if not first_para.startswith(('-', '•', '1.', '2.', '3.')):
+                sents = re.split(r'(?<=[.!?])\s+(?=[A-ZÄÖÜ„"])', first_para)
+                if len(sents) >= 3:
+                    new_start = [sents[0], sents[1]]
+                    remainder = " ".join(sents[2:])
+                    if remainder:
+                        new_start.append(remainder)
+                    paragraphs = new_start + paragraphs[1:]
+                elif len(sents) == 2:
+                    paragraphs = [sents[0], sents[1]] + paragraphs[1:]
+            
+            text = "\n\n".join(paragraphs)
 
-        return cleaned_text.strip()
+        return text.strip()
 
     async def inlet(
         self,
@@ -206,21 +185,30 @@ class Filter:
         __model__: Optional[dict] = None,
         __event_emitter__: Optional[Callable[[dict], Awaitable[None]]] = None,
     ) -> dict:
-        """Inlet hook: injects direct TTS formatting rules into the main prompt before streaming starts."""
+        """Inlet hook: injects natural TTS formatting rules into the main prompt before streaming."""
         if self.valves.mode != "inlet_prompt_injection":
             return body
 
         if self.valves.debug:
-            print("[TTS-FILTER] Running INLET prompt injection for live-stream TTS...")
+            print("[TTS-FILTER] Running INLET prompt injection for natural live-stream TTS...")
 
         instruction = (
             "\n\n[SYSTEM INSTRUKTION: TTS-FORMATIERUNG FÜR LIVE-SPRACHAUSGABE]\n"
-            "Strukturiere deine Antwort zwingend so, dass sie nahtlos und in Echtzeit per Sprachausgabe vorgelesen werden kann:\n"
-            "1. ABSATZ-STRUKTUR: Trenne die ersten 2 bis 3 Sätze jeweils als eigene kurze Absätze mit doppeltem Zeilenumbruch (\\n\\n) ab, damit die Sprachausgabe in unter 1 Sekunde beginnen kann. Schreibe danach ausführliche Absätze für den Hauptinhalt.\n"
-            "2. WÄHRUNGEN & SYMBOLE: Schreibe Währungen immer nach dem Betrag als Wort aus (z. B. '1 250 000 Euro', '850 000 Dollar', '750 000 Pfund'). Schreibe Symbole und Einheiten aus (z. B. '%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
-            "3. EMOJIS & SONDERZEICHEN: Schreibe Emojis und Icons phonetisch aus (z. B. '⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '©' -> 'Copyright', '™' -> 'Trademark', '#Thema' -> 'Hashtag Thema').\n"
-            "4. ABKÜRZUNGEN & LISTEN: Schreibe Abkürzungen wie z. B., bzw., d. h., ca., usw., ms immer vollständig als Wort aus. Formatiere nummerierte Listen fließend ('Erstens:', 'Zweitens:', 'Drittens:').\n"
-            "5. FLIESSTEXT: Verzichte auf störende visuelle Markdown-Zeichen (wie ***, ___, ###, ---), damit der Text flüssig gesprochen wird."
+            "Strukturiere deine Antwort für natürliche Sprachausgabe:\n"
+            "1. ABSATZ-STRUKTUR & LISTEN:\n"
+            "   - Beginne mit 1 bis maximal 2 kurzen Einleitungssätzen (jeweils mit doppeltem Zeilenumbruch \\n\\n abgetrennt), damit die Sprachausgabe ohne Verzögerung starten kann.\n"
+            "   - Fasse danach den Hauptteil in längeren, zusammenhängenden Absätzen zusammen.\n"
+            "   - Halte Aufzählungen und Listenpunkte innerhalb desselben Absatzes zusammen (nur einfacher Zeilenumbruch \\n, KEIN doppelter \\n\\n zwischen Listenpunkten).\n"
+            "2. ZAHLEN & DATEN ALS ZIFFERN BELASSEN:\n"
+            "   - Belasse Zahlen, Jahreszahlen, Versionsnummern, IP-Adressen und Datumsangaben IMMER als Ziffern (z. B. 2026, 3.12, 192.168.1.1, 15. April). Schreibe Zahlen NIEMALS als Wörter aus!\n"
+            "3. WÄHRUNGEN & SYMBOLE:\n"
+            "   - Schreibe Währungen nach dem Betrag als Wort aus (z. B. '1 250 000 Euro', '850 000 Dollar', '750 000 Pfund').\n"
+            "   - Schreibe Symbole und Einheiten aus (z. B. '%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
+            "   - Schreibe Emojis und Icons als kurzes Wort (z. B. '⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '#Thema' -> 'Hashtag Thema').\n"
+            "4. SATZZEICHEN & ABKÜRZUNGEN:\n"
+            "   - Schreibe gebräuchliche Abkürzungen voll aus (z. B. 'z. B.' -> 'zum Beispiel', 'd. h.' -> 'das heißt', 'bzw.' -> 'beziehungsweise', 'ca.' -> 'circa', 'usw.' -> 'und so weiter').\n"
+            "   - Schreibe Satzzeichen (Punkt, Komma, Doppelpunkt, Bindestrich) NIEMALS als Wörter aus – belasse sie als normale Satzzeichen für die natürliche Satzmelodie.\n"
+            "   - Verzichte auf störende visuelle Markdown-Syntax (wie ***, ___, ###, ---)."
         )
 
         messages = body.get("messages", [])
@@ -298,7 +286,6 @@ class Filter:
                         res_json = await response.json()
                         rewritten_text = res_json["choices"][0]["message"]["content"].strip()
                         if rewritten_text:
-                            # Apply final markdown & phonetic sanitization pass
                             assistant_msg["content"] = self._sanitize_and_clean(rewritten_text)
                             if self.valves.debug:
                                 print(f"[TTS-FILTER SUCCESS] Rewritten length: {len(assistant_msg['content'])} chars")
