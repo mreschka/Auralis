@@ -1,8 +1,8 @@
 """
 title: TTS Read-Along & Paragraph Optimizer
 author: Markus
-description: Optimizes assistant responses for 1:1 read-along TTS. Preserves exact wording, cleans visual Markdown, expands currencies/symbols/emojis, and structures the first 2-3 sentences into individual short paragraphs for instant playback.
-version: 1.2.0
+description: Optimizes responses for real-time live-streaming TTS (Open WebUI auto-play / call mode). Formats sentences into short initial paragraphs, expands currencies, symbols, emojis, and abbreviations directly in the stream.
+version: 1.3.0
 license: MIT
 """
 
@@ -20,24 +20,20 @@ class Filter:
             description="Priority of this filter in the Open WebUI pipeline."
         )
         mode: str = Field(
-            default="outlet_task_model",
-            description="Mode: 'outlet_task_model' (rewrites via task model) or 'inlet_prompt_injection' (instructs main model directly) or 'rule_based_only'."
+            default="inlet_prompt_injection",
+            description="Mode: 'inlet_prompt_injection' (recommended for live streaming/auto-play) or 'outlet_task_model' (post-generation rewrite) or 'rule_based_only'."
         )
         task_model: str = Field(
             default="gemma3:4b",
-            description="Fast task model for phonetic alignment (e.g. gemma3:4b, llama3.2:3b)."
+            description="Fast task model for phonetic alignment in outlet mode (e.g. gemma3:4b, llama3.2:3b)."
         )
         task_api_url: str = Field(
             default="http://localhost:11434/v1",
-            description="URL of the OpenAI/Ollama API endpoint (IMPORTANT: Must be explicitly configured in Valves; does not inherit global settings)."
+            description="URL of the OpenAI/Ollama API endpoint (only used in outlet mode; must be explicitly configured in Valves)."
         )
         task_api_key: str = Field(
             default="ollama",
             description="API key if required."
-        )
-        use_task_model: bool = Field(
-            default=True,
-            description="Use LLM for intelligent paragraph structuring and expansion (with deterministic fallback)."
         )
         clean_markdown: bool = Field(
             default=True,
@@ -58,14 +54,14 @@ class Filter:
                 "   - Trenne den 3. Satz als eigenen kurzen Absatz mit doppeltem Zeilenumbruch (\\n\\n) ab.\n"
                 "   - Der verbleibende Haupttext bleibt in seinen normalen, zusammenhängenden Absätzen.\n"
                 "3. SPRECHBARKEIT & PHONETIK:\n"
-                "   - Währungen nach Betrag ausschreiben ('€ 1 250 000' -> '1 250 000 Euro', '$ 3.7 billion' -> '3.7 billion Dollar', '£ 750 000' -> '750 000 Pfund').\n"
+                "   - Währungen nach dem Betrag ausschreiben ('€ 1 250 000' -> '1 250 000 Euro', '$ 3.7 billion' -> '3.7 billion Dollar', '£ 750 000' -> '750 000 Pfund').\n"
                 "   - Symbole & Einheiten ausschreiben ('%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
                 "   - Emojis & Sonderzeichen ausschreiben ('⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '©' -> 'Copyright', '™' -> 'Trademark', '#Thema' -> 'Hashtag Thema').\n"
                 "   - Abkürzungen ausschreiben ('z. B.' -> 'zum Beispiel', 'd. h.' -> 'das heißt', 'bzw.' -> 'beziehungsweise', 'ca.' -> 'circa', 'usw.' -> 'und so weiter', 'ms' -> 'Millisekunden').\n"
                 "   - Nummerierte Listenpunkte fließend formatieren ('1.' -> 'Erstens:', '2.' -> 'Zweitens:', '3.' -> 'Drittens:').\n"
                 "4. Gib ausschließlich den formatierten Originaltext aus, ohne jede Einleitung oder Begleittext."
             ),
-            description="System prompt for the 1:1 read-along TTS optimizer."
+            description="System prompt for the 1:1 read-along TTS optimizer (used in outlet mode)."
         )
 
     def __init__(self):
@@ -210,19 +206,21 @@ class Filter:
         __model__: Optional[dict] = None,
         __event_emitter__: Optional[Callable[[dict], Awaitable[None]]] = None,
     ) -> dict:
-        """Inlet hook: injects direct TTS formatting rules into the main prompt if in inlet mode."""
+        """Inlet hook: injects direct TTS formatting rules into the main prompt before streaming starts."""
         if self.valves.mode != "inlet_prompt_injection":
             return body
 
         if self.valves.debug:
-            print("[TTS-FILTER] Running INLET prompt injection...")
+            print("[TTS-FILTER] Running INLET prompt injection for live-stream TTS...")
 
         instruction = (
-            "\n\n[SYSTEM INSTRUKTION: TTS-FORMATIERUNG]\n"
-            "Strukturiere deine Antwort für Absatz-basierte Sprachsynthese:\n"
-            "1. Trenne die ersten 2 bis 3 Sätze jeweils als eigene kurze Absätze mit doppeltem Zeilenumbruch (\\n\\n) ab, damit die Sprachausgabe ohne Verzögerung starten kann.\n"
-            "2. Schreibe danach ausführliche Absätze für den Hauptinhalt.\n"
-            "3. Schreibe Abkürzungen wie z. B., bzw., d. h., usw., Währungen und Symbole wie %, €, $ immer vollständig als Wort aus."
+            "\n\n[SYSTEM INSTRUKTION: TTS-FORMATIERUNG FÜR LIVE-SPRACHAUSGABE]\n"
+            "Strukturiere deine Antwort zwingend so, dass sie nahtlos und in Echtzeit per Sprachausgabe vorgelesen werden kann:\n"
+            "1. ABSATZ-STRUKTUR: Trenne die ersten 2 bis 3 Sätze jeweils als eigene kurze Absätze mit doppeltem Zeilenumbruch (\\n\\n) ab, damit die Sprachausgabe in unter 1 Sekunde beginnen kann. Schreibe danach ausführliche Absätze für den Hauptinhalt.\n"
+            "2. WÄHRUNGEN & SYMBOLE: Schreibe Währungen immer nach dem Betrag als Wort aus (z. B. '1 250 000 Euro', '850 000 Dollar', '750 000 Pfund'). Schreibe Symbole und Einheiten aus (z. B. '%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
+            "3. EMOJIS & SONDERZEICHEN: Schreibe Emojis und Icons phonetisch aus (z. B. '⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '©' -> 'Copyright', '™' -> 'Trademark', '#Thema' -> 'Hashtag Thema').\n"
+            "4. ABKÜRZUNGEN & LISTEN: Schreibe Abkürzungen wie z. B., bzw., d. h., ca., usw., ms immer vollständig als Wort aus. Formatiere nummerierte Listen fließend ('Erstens:', 'Zweitens:', 'Drittens:').\n"
+            "5. FLIESSTEXT: Verzichte auf störende visuelle Markdown-Zeichen (wie ***, ___, ###, ---), damit der Text flüssig gesprochen wird."
         )
 
         messages = body.get("messages", [])
@@ -241,7 +239,7 @@ class Filter:
         __event_emitter__: Optional[Callable[[dict], Awaitable[None]]] = None,
         __model__: Optional[dict] = None,
     ) -> dict:
-        """Outlet hook: optimizes text for 1:1 read-along TTS."""
+        """Outlet hook: optimizes text for 1:1 read-along TTS in non-streaming or post-completion modes."""
         if self.valves.mode == "inlet_prompt_injection":
             return body
 
