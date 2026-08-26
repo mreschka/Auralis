@@ -2,7 +2,7 @@
 title: TTS Read-Along & Paragraph Optimizer
 author: Markus
 description: Optimizes assistant responses for natural, low-latency TTS. Preserves digits/numbers exactly, groups bullet lists in single paragraphs, expands currencies/symbols/emojis, and ensures natural speech prosody.
-version: 1.4.0
+version: 1.5.0
 license: MIT
 """
 
@@ -19,17 +19,17 @@ class Filter:
             default=10,
             description="Priority of this filter in the Open WebUI pipeline."
         )
-        mode: str = Field(
-            default="inlet_prompt_injection",
-            description="Mode: 'inlet_prompt_injection' (recommended for live streaming/auto-play) or 'outlet_task_model' (post-generation rewrite) or 'rule_based_only'."
+        use_task_model: bool = Field(
+            default=True,
+            description="Use fast LLM task model for paragraph restructuring (with deterministic fallback)."
         )
         task_model: str = Field(
             default="gemma3:4b",
-            description="Fast task model for phonetic alignment in outlet mode (e.g. gemma3:4b, llama3.2:3b)."
+            description="Task model name (e.g. gemma3:4b, llama3.2:3b)."
         )
         task_api_url: str = Field(
             default="http://localhost:11434/v1",
-            description="URL of the OpenAI/Ollama API endpoint (only used in outlet mode; must be explicitly configured in Valves)."
+            description="URL of the OpenAI/Ollama API endpoint (must be explicitly configured in Valves)."
         )
         task_api_key: str = Field(
             default="ollama",
@@ -37,7 +37,7 @@ class Filter:
         )
         clean_markdown: bool = Field(
             default=True,
-            description="Strips visual Markdown formatting (**, __, code blocks, horizontal rules) for clean TTS speech."
+            description="Strips visual Markdown formatting (**, __, code blocks, horizontal rules) for clean speech."
         )
         debug: bool = Field(
             default=True,
@@ -45,35 +45,35 @@ class Filter:
         )
         custom_system_prompt: str = Field(
             default=(
-                "Du bist ein phonetischer Formatierer für Sprachsynthese mit 1:1-Mitlesbarkeit am Bildschirm.\n\n"
-                "STRIKTE REGELN:\n"
+                "Du bist ein Text-Strukturierer für Sprachsynthese (TTS) mit 1:1-Mitlesbarkeit am Bildschirm.\n\n"
+                "AUFGABEN & REGELN:\n"
                 "1. KEINE INHALTSÄNDERUNG: Ändere keine Formulierungen und formuliere nichts um. Der Nutzer liest den Text beim Hören am Bildschirm mit!\n"
-                "2. ZAHLEN & DATEN ALS ZIFFERN BELASSEN: Schreibe Zahlen, Jahreszahlen, Versionsnummern, IP-Adressen und Datumsangaben NIEMALS als Wörter aus! Belasse sie immer als Ziffern (z. B. 2026, 3.12, 192.168.1.1, 15. April).\n"
+                "2. ZAHLEN & DATEN ALS ZIFFERN BELASSEN: Belasse alle Zahlen, Jahreszahlen, Versionsnummern, IP-Adressen und Datumsangaben IMMER als Ziffern (z. B. 2026, 3.12, 192.168.1.1, 15. April). Schreibe Zahlen NIEMALS in Worten aus!\n"
                 "3. ABSATZ-STRUKTUR & LISTEN:\n"
-                "   - Beginne mit 1 bis maximal 2 kurzen Einleitungssätzen (jeweils mit doppeltem Zeilenumbruch \\n\\n abgetrennt), damit die Sprachausgabe sofort starten kann.\n"
-                "   - Halte den Hauptteil in längeren, gehaltvollen Absätzen zusammen.\n"
-                "   - Halte Aufzählungen und Listenpunkte innerhalb desselben Absatzes zusammen (nur einfacher Zeilenumbruch \\n, KEIN doppelter \\n\\n zwischen Listenpunkten).\n"
+                "   - Halte die ersten 2 bis maximal 3 Absätze kurz (je 1-2 Sätze), getrennt durch \\n\\n, damit die Sprachausgabe sofort starten kann.\n"
+                "   - Fasse danach den Hauptteil in längeren, natürlichen Absätzen zusammen.\n"
+                "   - Halte Aufzählungen und Listenpunkte innerhalb desselben Absatzes zusammen (kein \\n\\n zwischen Listenpunkten).\n"
                 "4. SPRECHBARKEIT & PHONETIK:\n"
-                "   - Währungen nach dem Betrag ausschreiben ('€ 1 250 000' -> '1 250 000 Euro', '$ 3.7 billion' -> '3.7 billion Dollar', '£ 750 000' -> '750 000 Pfund').\n"
-                "   - Symbole & Einheiten ausschreiben ('%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
-                "   - Emojis & Sonderzeichen als Wort ausschreiben ('⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '©' -> 'Copyright', '™' -> 'Trademark', '#Thema' -> 'Hashtag Thema').\n"
-                "   - Abkürzungen ausschreiben ('z. B.' -> 'zum Beispiel', 'd. h.' -> 'das heißt', 'bzw.' -> 'beziehungsweise', 'ca.' -> 'circa', 'usw.' -> 'und so weiter', 'ms' -> 'Millisekunden').\n"
+                "   - Währungen nach dem Betrag ausschreiben (z. B. '1 250 000 Euro', '850 000 Dollar', '750 000 Pfund').\n"
+                "   - Symbole & Einheiten ausschreiben (z. B. '%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
+                "   - Emojis & Sonderzeichen als Wort ausschreiben (z. B. '⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '©' -> 'Copyright', '™' -> 'Trademark', '#Thema' -> 'Hashtag Thema').\n"
+                "   - Abkürzungen ausschreiben (z. B. 'z. B.' -> 'zum Beispiel', 'd. h.' -> 'das heißt', 'bzw.' -> 'beziehungsweise', 'ca.' -> 'circa', 'usw.' -> 'und so weiter', 'ms' -> 'Millisekunden').\n"
                 "   - Satzzeichen (Punkt, Komma, Doppelpunkt) NIEMALS als Wörter buchstabieren, sondern als normale Satzzeichen belassen.\n"
-                "5. Gib ausschließlich den formatierten Originaltext aus, ohne Einleitung oder Begleittext."
+                "5. Gib ausschließlich den formatierten Originaltext aus, ohne jede Einleitung oder Erklärung."
             ),
-            description="System prompt for the 1:1 read-along TTS optimizer (used in outlet mode)."
+            description="System prompt for the task model."
         )
 
     def __init__(self):
         self.valves = self.Valves()
 
     def _sanitize_and_clean(self, text: str) -> str:
-        """Deterministic, high-fidelity phonetic and markdown sanitizer."""
+        """Deterministic phonetic and markdown sanitizer."""
         # 1. Clean markdown headers and horizontal rules
         text = re.sub(r'^\s*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
         text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
 
-        # 2. Strip inline markdown styling (bold, italic, code) without destroying text
+        # 2. Strip inline markdown styling (bold, italic, code)
         if self.valves.clean_markdown:
             text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
             text = re.sub(r'\*([^*]+)\*', r'\1', text)
@@ -81,19 +81,18 @@ class Filter:
             text = re.sub(r'_([^_]+)_', r'\1', text)
             text = re.sub(r'`([^`]+)`', r'\1', text)
 
-        # 3. Currencies: Move currency symbol AFTER digits/scale words, keeping DIGITS UNTOUCHED
+        # 3. Currencies: Move currency symbol AFTER digits/scale words, keeping digits intact
         scale_units = r'(?:\s*(?:million|billion|trillion|mio|mrd|millionen|milliarden|tausend|thousand))?'
         text = re.sub(r'€\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Euro', text, flags=re.IGNORECASE)
         text = re.sub(r'\$\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Dollar', text, flags=re.IGNORECASE)
         text = re.sub(r'£\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Pfund', text, flags=re.IGNORECASE)
         text = re.sub(r'¥\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Yen', text, flags=re.IGNORECASE)
-        # Standalone currency symbols
         text = re.sub(r'€', ' Euro ', text)
         text = re.sub(r'\$', ' Dollar ', text)
         text = re.sub(r'£', ' Pfund ', text)
         text = re.sub(r'¥', ' Yen ', text)
 
-        # 4. Units & Percent (keep numbers as digits!)
+        # 4. Units & Percent
         text = re.sub(r'%\s*', ' Prozent ', text)
         text = re.sub(r'°\s*C\b', ' Grad Celsius', text)
         text = re.sub(r'°\s*F\b', ' Grad Fahrenheit', text)
@@ -116,7 +115,7 @@ class Filter:
         for pattern, repl in symbols:
             text = re.sub(pattern, repl, text)
 
-        # 6. Abbreviations (expand only abbreviations, never touch digits/punctuation)
+        # 6. Abbreviations
         abbreviations = [
             (r'\bz\.B\.', 'zum Beispiel'),
             (r'\bz\.\s*B\.', 'zum Beispiel'),
@@ -142,11 +141,11 @@ class Filter:
         for pattern, repl in abbreviations:
             text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
 
-        # 7. Normalize spaces and narrow non-breaking spaces
+        # 7. Normalize spaces
         text = text.replace('\u202f', ' ').replace('\u00a0', ' ')
         text = re.sub(r'[ \t]+', ' ', text)
 
-        # 8. List items formatting: Keep list items together within the same paragraph
+        # 8. List items: Keep bullet items together in single paragraph
         lines = text.split('\n')
         cleaned_lines = []
         for line in lines:
@@ -159,7 +158,7 @@ class Filter:
         
         text = '\n'.join(cleaned_lines)
 
-        # 9. Paragraph Pacing: Split first 1-2 introductory sentences, keep everything else intact
+        # 9. Paragraph Pacing: Split only the first 1-2 introductory sentences
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         if paragraphs:
             first_para = paragraphs[0]
@@ -178,48 +177,6 @@ class Filter:
 
         return text.strip()
 
-    async def inlet(
-        self,
-        body: dict,
-        __user__: Optional[dict] = None,
-        __model__: Optional[dict] = None,
-        __event_emitter__: Optional[Callable[[dict], Awaitable[None]]] = None,
-    ) -> dict:
-        """Inlet hook: injects natural TTS formatting rules into the main prompt before streaming."""
-        if self.valves.mode != "inlet_prompt_injection":
-            return body
-
-        if self.valves.debug:
-            print("[TTS-FILTER] Running INLET prompt injection for natural live-stream TTS...")
-
-        instruction = (
-            "\n\n[SYSTEM INSTRUKTION: TTS-FORMATIERUNG FÜR LIVE-SPRACHAUSGABE]\n"
-            "Strukturiere deine Antwort für natürliche Sprachausgabe:\n"
-            "1. ABSATZ-STRUKTUR & LISTEN:\n"
-            "   - Beginne mit 1 bis maximal 2 kurzen Einleitungssätzen (jeweils mit doppeltem Zeilenumbruch \\n\\n abgetrennt), damit die Sprachausgabe ohne Verzögerung starten kann.\n"
-            "   - Fasse danach den Hauptteil in längeren, zusammenhängenden Absätzen zusammen.\n"
-            "   - Halte Aufzählungen und Listenpunkte innerhalb desselben Absatzes zusammen (nur einfacher Zeilenumbruch \\n, KEIN doppelter \\n\\n zwischen Listenpunkten).\n"
-            "2. ZAHLEN & DATEN ALS ZIFFERN BELASSEN:\n"
-            "   - Belasse Zahlen, Jahreszahlen, Versionsnummern, IP-Adressen und Datumsangaben IMMER als Ziffern (z. B. 2026, 3.12, 192.168.1.1, 15. April). Schreibe Zahlen NIEMALS als Wörter aus!\n"
-            "3. WÄHRUNGEN & SYMBOLE:\n"
-            "   - Schreibe Währungen nach dem Betrag als Wort aus (z. B. '1 250 000 Euro', '850 000 Dollar', '750 000 Pfund').\n"
-            "   - Schreibe Symbole und Einheiten aus (z. B. '%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
-            "   - Schreibe Emojis und Icons als kurzes Wort (z. B. '⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '#Thema' -> 'Hashtag Thema').\n"
-            "4. SATZZEICHEN & ABKÜRZUNGEN:\n"
-            "   - Schreibe gebräuchliche Abkürzungen voll aus (z. B. 'z. B.' -> 'zum Beispiel', 'd. h.' -> 'das heißt', 'bzw.' -> 'beziehungsweise', 'ca.' -> 'circa', 'usw.' -> 'und so weiter').\n"
-            "   - Schreibe Satzzeichen (Punkt, Komma, Doppelpunkt, Bindestrich) NIEMALS als Wörter aus – belasse sie als normale Satzzeichen für die natürliche Satzmelodie.\n"
-            "   - Verzichte auf störende visuelle Markdown-Syntax (wie ***, ___, ###, ---)."
-        )
-
-        messages = body.get("messages", [])
-        if messages:
-            if messages[0].get("role") == "system":
-                messages[0]["content"] += instruction
-            else:
-                messages.insert(0, {"role": "system", "content": instruction})
-
-        return body
-
     async def outlet(
         self,
         body: dict,
@@ -227,10 +184,7 @@ class Filter:
         __event_emitter__: Optional[Callable[[dict], Awaitable[None]]] = None,
         __model__: Optional[dict] = None,
     ) -> dict:
-        """Outlet hook: optimizes text for 1:1 read-along TTS in non-streaming or post-completion modes."""
-        if self.valves.mode == "inlet_prompt_injection":
-            return body
-
+        """Outlet hook: post-processes assistant response for TTS speech output."""
         messages = body.get("messages", [])
         if not messages:
             return body
@@ -247,7 +201,7 @@ class Filter:
             print(f"[TTS-FILTER] Outlet triggered for model '{self.valves.task_model}' at '{self.valves.task_api_url}'")
             print(f"[TTS-FILTER] Original message length: {len(original_text)} chars")
 
-        if self.valves.mode == "rule_based_only" or not self.valves.use_task_model:
+        if not self.valves.use_task_model:
             assistant_msg["content"] = self._sanitize_and_clean(original_text)
             if self.valves.debug:
                 print("[TTS-FILTER] Rule-based optimization applied successfully.")
