@@ -1,8 +1,8 @@
 """
 title: TTS Read-Along & Paragraph Optimizer
 author: Markus
-description: Optimizes assistant responses for natural, low-latency TTS. Preserves digits/numbers exactly, groups bullet lists in single paragraphs, expands currencies/symbols/emojis, and ensures natural speech prosody.
-version: 1.5.0
+description: Optimizes assistant responses for natural, low-latency TTS. Strips emojis, converts keycaps, preserves digits/numbers exactly, groups bullet lists in single paragraphs, expands currencies/symbols, and ensures natural speech prosody.
+version: 1.6.0
 license: MIT
 """
 
@@ -47,18 +47,21 @@ class Filter:
             default=(
                 "Du bist ein Text-Strukturierer für Sprachsynthese (TTS) mit 1:1-Mitlesbarkeit am Bildschirm.\n\n"
                 "AUFGABEN & REGELN:\n"
-                "1. KEINE INHALTSÄNDERUNG: Ändere keine Formulierungen und formuliere nichts um. Der Nutzer liest den Text beim Hören am Bildschirm mit!\n"
-                "2. ZAHLEN & DATEN ALS ZIFFERN BELASSEN: Belasse alle Zahlen, Jahreszahlen, Versionsnummern, IP-Adressen und Datumsangaben IMMER als Ziffern (z. B. 2026, 3.12, 192.168.1.1, 15. April). Schreibe Zahlen NIEMALS in Worten aus!\n"
-                "3. ABSATZ-STRUKTUR & LISTEN:\n"
-                "   - Halte die ersten 2 bis maximal 3 Absätze kurz (je 1-2 Sätze), getrennt durch \\n\\n, damit die Sprachausgabe sofort starten kann.\n"
+                "1. ABSATZ-STRUKTUR & LISTEN:\n"
+                "   - Beginne mit 1 bis maximal 2 kurzen Einleitungssätzen (jeweils mit doppeltem Zeilenumbruch \\n\\n abgetrennt), damit die Sprachausgabe sofort starten kann.\n"
                 "   - Fasse danach den Hauptteil in längeren, natürlichen Absätzen zusammen.\n"
                 "   - Halte Aufzählungen und Listenpunkte innerhalb desselben Absatzes zusammen (kein \\n\\n zwischen Listenpunkten).\n"
-                "4. SPRECHBARKEIT & PHONETIK:\n"
+                "2. ZAHLEN & DATEN (STRIKT):\n"
+                "   - Belasse alle Zahlen, Jahreszahlen, Versionsnummern, IP-Adressen und Datumsangaben IMMER als Ziffern (z. B. 2026, 3.12, 192.168.1.1, 15. April). Schreibe Zahlen NIEMALS in Worten aus!\n"
+                "3. EMOJIS & SONDERZEICHEN (STRIKT):\n"
+                "   - Entferne alle visuellen Deko-Emojis (wie 🎤, 🎧, 😃, 😢, 😎, 🐱, 🚀, 🍕, 🌟, 🌍, 🧠, 🐢) restlos aus dem Text. Es dürfen KEINE rohen Emojis im Text verbleiben!\n"
+                "   - Wandle Keycap-Zahlen (1️⃣, 2️⃣) in normale Ziffern um (1., 2.).\n"
+                "   - Ersetze funktionale Symbole phonetisch (z. B. ⚡ -> Blitz-Symbol, 💡 -> Glühbirnen-Symbol, ✓ -> Häkchen, ✗ -> Kreuz, → -> Pfeil zu).\n"
+                "4. WÄHRUNGEN & ABKÜRZUNGEN:\n"
                 "   - Währungen nach dem Betrag ausschreiben (z. B. '1 250 000 Euro', '850 000 Dollar', '750 000 Pfund').\n"
                 "   - Symbole & Einheiten ausschreiben (z. B. '%' -> 'Prozent', '°C' -> 'Grad Celsius', '& Co.' -> 'und Co.').\n"
-                "   - Emojis & Sonderzeichen als Wort ausschreiben (z. B. '⚡' -> 'Blitz-Symbol', '💡' -> 'Glühbirnen-Symbol', '✓' -> 'Häkchen', '✗' -> 'Kreuz', '©' -> 'Copyright', '™' -> 'Trademark', '#Thema' -> 'Hashtag Thema').\n"
                 "   - Abkürzungen ausschreiben (z. B. 'z. B.' -> 'zum Beispiel', 'd. h.' -> 'das heißt', 'bzw.' -> 'beziehungsweise', 'ca.' -> 'circa', 'usw.' -> 'und so weiter', 'ms' -> 'Millisekunden').\n"
-                "   - Satzzeichen (Punkt, Komma, Doppelpunkt) NIEMALS als Wörter buchstabieren, sondern als normale Satzzeichen belassen.\n"
+                "   - Satzzeichen (Punkt, Komma, Doppelpunkt) NIEMALS als Wörter buchstabieren.\n"
                 "5. Gib ausschließlich den formatierten Originaltext aus, ohne jede Einleitung oder Erklärung."
             ),
             description="System prompt for the task model."
@@ -68,38 +71,21 @@ class Filter:
         self.valves = self.Valves()
 
     def _sanitize_and_clean(self, text: str) -> str:
-        """Deterministic phonetic and markdown sanitizer."""
-        # 1. Clean markdown headers and horizontal rules
-        text = re.sub(r'^\s*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+        """Deterministic phonetic, emoji and markdown sanitizer."""
+        # 1. Clean keycap numbers 1️⃣ -> 1., 2️⃣ -> 2., etc.
+        keycaps = {
+            '1️⃣': '1.', '2️⃣': '2.', '3️⃣': '3.', '4️⃣': '4.', '5️⃣': '5.',
+            '6️⃣': '6.', '7️⃣': '7.', '8️⃣': '8.', '9️⃣': '9.', '🔟': '10.',
+            '0️⃣': '0.', '1\ufe0f\u20e3': '1.', '2\ufe0f\u20e3': '2.', '3\ufe0f\u20e3': '3.',
+            '4\ufe0f\u20e3': '4.', '5\ufe0f\u20e3': '5.', '6\ufe0f\u20e3': '6.', '7\ufe0f\u20e3': '7.',
+            '8\ufe0f\u20e3': '8.', '9\ufe0f\u20e3': '9.', '🔟\ufe0f': '10.',
+            '#️⃣': '#', '*️⃣': '*'
+        }
+        for k, v in keycaps.items():
+            text = text.replace(k, v)
 
-        # 2. Strip inline markdown styling (bold, italic, code)
-        if self.valves.clean_markdown:
-            text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-            text = re.sub(r'\*([^*]+)\*', r'\1', text)
-            text = re.sub(r'__([^_]+)__', r'\1', text)
-            text = re.sub(r'_([^_]+)_', r'\1', text)
-            text = re.sub(r'`([^`]+)`', r'\1', text)
-
-        # 3. Currencies: Move currency symbol AFTER digits/scale words, keeping digits intact
-        scale_units = r'(?:\s*(?:million|billion|trillion|mio|mrd|millionen|milliarden|tausend|thousand))?'
-        text = re.sub(r'€\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Euro', text, flags=re.IGNORECASE)
-        text = re.sub(r'\$\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Dollar', text, flags=re.IGNORECASE)
-        text = re.sub(r'£\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Pfund', text, flags=re.IGNORECASE)
-        text = re.sub(r'¥\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Yen', text, flags=re.IGNORECASE)
-        text = re.sub(r'€', ' Euro ', text)
-        text = re.sub(r'\$', ' Dollar ', text)
-        text = re.sub(r'£', ' Pfund ', text)
-        text = re.sub(r'¥', ' Yen ', text)
-
-        # 4. Units & Percent
-        text = re.sub(r'%\s*', ' Prozent ', text)
-        text = re.sub(r'°\s*C\b', ' Grad Celsius', text)
-        text = re.sub(r'°\s*F\b', ' Grad Fahrenheit', text)
-        text = re.sub(r'§\s*', ' Paragraph ', text)
-
-        # 5. Common Emojis & Symbols
-        symbols = [
+        # 2. Named functional symbols
+        named_symbols = [
             (r'⚡', ' Blitz-Symbol '),
             (r'💡', ' Glühbirnen-Symbol '),
             (r'[✓✔]', ' Häkchen '),
@@ -112,10 +98,63 @@ class Filter:
             (r'&\s*Co\.', 'und Co.'),
             (r'\b&\b', 'und'),
         ]
-        for pattern, repl in symbols:
+        for pattern, repl in named_symbols:
             text = re.sub(pattern, repl, text)
 
-        # 6. Abbreviations
+        # 3. Universal Emoji & Pictograph Stripping
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F600-\U0001F64F"  # Emoticons
+            "\U0001F300-\U0001F5FF"  # Misc Symbols & Pictographs (earth, cat, rocket, pizza, star, etc.)
+            "\U0001F680-\U0001F6FF"  # Transport & Map
+            "\U0001F700-\U0001F77F"  # Alchemical Symbols
+            "\U0001F780-\U0001F7FF"  # Geometric Shapes
+            "\U0001F800-\U0001F8FF"  # Supplemental Arrows
+            "\U0001F900-\U0001F9FF"  # Supplemental Symbols (brain, turtle, etc.)
+            "\U0001FA00-\U0001FA6F"  # Chess Symbols
+            "\U0001FA70-\U0001FAFF"  # Symbols & Pictographs Extended
+            "\U00002702-\U000027B0"  # Dingbats
+            "\U000024C2-\U0001F251"  # Enclosed Characters
+            "\U0001F004-\U0001F0CF"  # Playing cards / Mahjong
+            "\U00002600-\U000026FF"  # Misc Symbols
+            "\U00002B00-\U00002BFF"  # Misc Symbols & Arrows
+            "\U0000FE00-\U0000FE0F"  # Variation Selectors
+            "\U000020D0-\U000020FF"  # Combining Diacritical Marks for Symbols
+            "]+",
+            flags=re.UNICODE
+        )
+        text = emoji_pattern.sub('', text)
+
+        # 4. Clean markdown headers and horizontal rules
+        text = re.sub(r'^\s*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+
+        # 5. Strip inline markdown styling (bold, italic, code)
+        if self.valves.clean_markdown:
+            text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+            text = re.sub(r'\*([^*]+)\*', r'\1', text)
+            text = re.sub(r'__([^_]+)__', r'\1', text)
+            text = re.sub(r'_([^_]+)_', r'\1', text)
+            text = re.sub(r'`([^`]+)`', r'\1', text)
+
+        # 6. Currencies: Move currency symbol AFTER digits/scale words, keeping digits intact
+        scale_units = r'(?:\s*(?:million|billion|trillion|mio|mrd|millionen|milliarden|tausend|thousand))?'
+        text = re.sub(r'€\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Euro', text, flags=re.IGNORECASE)
+        text = re.sub(r'\$\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Dollar', text, flags=re.IGNORECASE)
+        text = re.sub(r'£\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Pfund', text, flags=re.IGNORECASE)
+        text = re.sub(r'¥\s*([0-9]+(?:[.,\s\u202f][0-9]+)*' + scale_units + r')', r'\1 Yen', text, flags=re.IGNORECASE)
+        text = re.sub(r'€', ' Euro ', text)
+        text = re.sub(r'\$', ' Dollar ', text)
+        text = re.sub(r'£', ' Pfund ', text)
+        text = re.sub(r'¥', ' Yen ', text)
+
+        # 7. Units & Percent
+        text = re.sub(r'%\s*', ' Prozent ', text)
+        text = re.sub(r'°\s*C\b', ' Grad Celsius', text)
+        text = re.sub(r'°\s*F\b', ' Grad Fahrenheit', text)
+        text = re.sub(r'§\s*', ' Paragraph ', text)
+
+        # 8. Common abbreviations
         abbreviations = [
             (r'\bz\.B\.', 'zum Beispiel'),
             (r'\bz\.\s*B\.', 'zum Beispiel'),
@@ -141,11 +180,11 @@ class Filter:
         for pattern, repl in abbreviations:
             text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
 
-        # 7. Normalize spaces
+        # 9. Normalize spaces
         text = text.replace('\u202f', ' ').replace('\u00a0', ' ')
         text = re.sub(r'[ \t]+', ' ', text)
 
-        # 8. List items: Keep bullet items together in single paragraph
+        # 10. List items: Keep bullet items together in single paragraph
         lines = text.split('\n')
         cleaned_lines = []
         for line in lines:
@@ -158,7 +197,7 @@ class Filter:
         
         text = '\n'.join(cleaned_lines)
 
-        # 9. Paragraph Pacing: Split only the first 1-2 introductory sentences
+        # 11. Paragraph Pacing: Split only the first 1-2 introductory sentences
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         if paragraphs:
             first_para = paragraphs[0]
