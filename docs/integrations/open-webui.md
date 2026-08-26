@@ -1,83 +1,91 @@
-# Open WebUI Integration & Instant Read-Along Filter
+# Open WebUI ➔ Auralis TTS Integration & Read-Along Filter 🎧
 
-Auralis is designed as a drop-in, zero-configuration local Text-to-Speech (TTS) engine for [Open WebUI](https://github.com/open-webui/open-webui).
-
----
-
-## 🌟 Key Features for Open WebUI
-
-* **Native OpenAI TTS API:** Compatible with `/v1/audio/speech`, `/v1/models`, and `/v1/audio/voices`.
-* **Zero-Latency Voice Switching:** In-memory caching of speaker conditioning latents ensures switching voices (e.g. between `markus`, `anna-1`, and `marie`) incurs 0 ms overhead and 0 MB VRAM leakage.
-* **vLLM FlashAttention Batching:** Multi-sentence paragraphs are computed in parallel GPU batches (`max_concurrency: 8`), delivering Real-Time Factors of **`0.18x`** (over 5x faster than real time).
-* **Automatic Voice Discovery:** Drop any 24 kHz mono `.wav` file into the `voices/` directory, and it immediately appears in Open WebUI's voice dropdown.
+This directory provides the **TTS Read-Along & Paragraph Optimizer Filter** (v1.2.0) for Open WebUI.
 
 ---
 
-## ⚙️ Open WebUI Configuration
+## 🎯 Purpose & Two-Tier Architecture
 
-### 1. Audio & TTS Settings
+When synthesizing speech from LLM responses in Open WebUI, raw markdown, numbers/currencies, and lack of paragraph pacing cause stuttering or long delays.
 
-In Open WebUI, navigate to **Admin Panel ➔ Settings ➔ Audio ➔ TTS Settings** (or user audio settings):
-
-| Setting | Value | Notes |
-| :--- | :--- | :--- |
-| **TTS Engine** | `OpenAI` | Uses standard OpenAI speech synthesis protocol |
-| **API Base URL** | `http://<server-ip>:8502/v1` | Point to your Auralis server endpoint |
-| **API Key** | `dummy` | Any non-empty string (e.g. `sk-none`) |
-| **TTS Model** | `xttsv2` | Or `tts-1` / `tts-1-hd` (all supported) |
-| **Default Voice** | `anna-1` | Matches filename in `voices/<name>.wav` |
-| **Split on** | `Paragraphs` or `Punctuation` | **`Paragraphs`** is recommended when using the Read-Along Filter |
-
----
-
-## 🎯 TTS Read-Along & Paragraph Optimizer Filter
-
-When using TTS in chat, users want **instant playback (< 1 second)** while being able to **read along 1:1 on-screen**.
-
-We provide a specialized Open WebUI Filter function located in [`integrations/open-webui/tts_read_along_filter.py`](https://github.com/mreschka/Auralis/blob/main/integrations/open-webui/tts_read_along_filter.py).
-
-### How It Works
+This filter implements a **two-tier optimization pipeline**:
 
 ```mermaid
-sequenceDiagram
-    participant User as User (Browser)
-    participant Filter as Read-Along Filter (Outlet)
-    participant OWUI as Open WebUI TTS Engine
-    participant Auralis as Auralis TTS (vLLM Engine)
-
-    User->>Filter: Chat model generates response
-    Filter->>Filter: Expands abbreviations & splits first 2-3 sentences into short paragraphs (\n\n)
-    Filter->>User: Renders 1:1 readable text in chat window
-    
-    OWUI->>Auralis: Sends Paragraph 1 (short intro sentence)
-    Auralis-->>OWUI: Rendered in ~0.8s!
-    OWUI->>User: 🔊 Voice starts speaking in < 1 second!
-    
-    OWUI->>Auralis: Sends Paragraphs 2 & 3
-    Auralis-->>OWUI: Ready in background while Paragraph 1 plays
-    
-    OWUI->>Auralis: Sends Paragraph 4 (longer body text)
-    Auralis-->>OWUI: vLLM parallel batching generates full text concurrently
-    OWUI->>User: 🔊 Continuous, seamless audio playback
+graph TD
+    A[Assistant Response] --> B{Task Model / Mode}
+    B -->|outlet_task_model| C[LLM Rewrite & Paragraph Structuring]
+    B -->|inlet_prompt_injection| D[System Prompt Injection]
+    B -->|rule_based_only| E[Fast Direct Path]
+    C --> F[Markdown-Aware & Phonetic Sanitizer]
+    D --> F
+    E --> F
+    F --> G[1. Currency & Units: $ 3.7 billion -> 3.7 billion Dollar]
+    F --> H[2. Emojis & Symbols: ⚡ -> Blitz-Symbol, ✓ -> Häkchen]
+    F --> I[3. Markdown-Aware Cleaning: Strips raw **, *, code tags]
+    F --> J[4. Paragraph Pacing: First 2-3 sentences as standalone paragraphs]
+    J --> K[Open WebUI TTS Engine -> Instant Audio Playback in < 1s]
 ```
 
-### Installation in Open WebUI
-
-1. In Open WebUI, navigate to **Workspace ➔ Functions** (or **Admin Panel ➔ Functions**).
-2. Click **`+` (Create Function)** and select **`Filter`**.
-3. Paste the contents of `integrations/open-webui/tts_read_along_filter.py`.
-4. Click **Save**.
-5. Under **Workspace ➔ Models**, enable the filter for your active chat models.
+1. **1:1 Synchronous Read-Along:** Preserves the assistant's exact original text without hallucinating or altering sentences, allowing users to comfortably read along on-screen while listening.
+2. **Markdown-Aware Cleaning:** Utilizes Markdown and HTML parsing (`markdown` + `BeautifulSoup`, built directly into Open WebUI) to reliably clean visual Markdown artifacts (`**`, `*`, `__`, code fences, horizontal lines) without breaking sentence boundaries.
+3. **Phonetic Expansions:**
+   * **Currencies & Units:** Expands `€ 1 250 000` ➔ `1 250 000 Euro`, `$ 3.7 billion` ➔ `3.7 billion Dollar`, `£ 750 000` ➔ `750 000 Pfund`, `%` ➔ `Prozent`, `°C` ➔ `Grad Celsius`.
+   * **Emojis & Symbols:** Expands `⚡` ➔ `Blitz-Symbol`, `💡` ➔ `Glühbirnen-Symbol`, `✓` ➔ `Häkchen`, `✗` ➔ `Kreuz`, `©` ➔ `Copyright`, `™` ➔ `Trademark`, `#Tag` ➔ `Hashtag Tag`.
+   * **Abbreviations:** Expands `z. B.` ➔ `zum Beispiel`, `bzw.` ➔ `beziehungsweise`, `d. h.` ➔ `das heißt`, `ca.` ➔ `circa`, `e.g.` ➔ `for example`.
+4. **Paragraph Pacing (`\n\n`):** Breaks the first 2–3 sentences into individual short starter paragraphs so Open WebUI's `Split on: Paragraphs` triggers playback in under 1 second.
 
 ---
 
-## 🎙️ Custom Voice Cloning
+## 🚀 Setup & Configuration in Open WebUI
 
-To add custom voices:
+### Step 1: Import the Filter Function
+1. In Open WebUI, navigate to **Workspace ➔ Functions** (or **Admin Panel ➔ Functions**).
+2. Click **`+` (Create Function)** and select **`Filter`**.
+3. Copy and paste the entire content of [`tts_read_along_filter.py`](tts_read_along_filter.py).
+4. Click **Save**.
 
-1. Record 10–30 seconds of clean speech.
-2. Convert to 24 kHz mono 16-bit PCM WAV:
-   ```bash
-   ffmpeg -i reference.mp3 -ar 24000 -ac 1 -c:a pcm_s16le voices/myvoice.wav
-   ```
-3. The voice `myvoice` will be immediately available via `GET /v1/audio/voices` and in Open WebUI.
+### Step 2: Configure Filter Valves (⚙️ IMPORTANT)
+
+> [!IMPORTANT]
+> **Valve Settings do NOT automatically inherit global Open WebUI URLs!**  
+> You must click the **gear icon (⚙️ Valves)** next to the function and explicitly configure `task_api_url`.
+
+| Valve / Setting | Default | Description |
+| :--- | :--- | :--- |
+| **`mode`** | `outlet_task_model` | `outlet_task_model` (rewrites via task model), `inlet_prompt_injection` (direct system prompt), or `rule_based_only` (instant deterministic sanitizer) |
+| **`task_model`** | `gemma3:4b` | Fast task model (e.g. `gemma3:4b`, `llama3.2:3b`) |
+| **`task_api_url`** | `http://localhost:11434/v1` | **Must point to your Ollama / LLM endpoint** (e.g. `http://<ollama-host-ip>:11434/v1` or `http://host.docker.internal:11434/v1`). Note: `localhost` inside a Docker container refers to the container itself! |
+| **`task_api_key`** | `ollama` | API key if authentication is required |
+| **`clean_markdown`** | `True` | Enables Markdown-aware parsing to strip visual markdown artifacts |
+| **`debug`** | `True` | Outputs verbose logs to Open WebUI Docker console (`docker logs -f open-webui`) |
+
+### Step 3: Configure Open WebUI Audio Settings
+1. Go to **Settings ➔ Audio ➔ TTS Settings** (or **Admin Panel ➔ Audio**).
+2. Configure the following fields:
+   * **TTS Engine:** `OpenAI`
+   * **API Base URL:** `http://<auralis-server-ip>:8502/v1`
+   * **API Key:** `dummy`
+   * **TTS Model:** `xttsv2`
+   * **Default Voice:** `anna-1` (or any `.wav` file in `voices/`)
+   * **Split on:** **`Paragraphs`** (or **`Punctuation`**)
+
+### Step 4: Enable Filter for Chat Models
+1. Go to **Workspace ➔ Models**.
+2. Select your desired chat model.
+3. Under **Filters**, enable **`TTS Read-Along & Paragraph Optimizer`**.
+4. Click **Save**.
+
+---
+
+## 🔍 Debugging & Log Inspection
+
+To watch the filter in real time:
+
+```bash
+docker logs -f open-webui | grep "TTS-FILTER"
+```
+
+Output format:
+* `[TTS-FILTER] Outlet triggered for model 'gemma3:4b' at 'http://...'`
+* `[TTS-FILTER] Original message length: 2363 chars`
+* `[TTS-FILTER SUCCESS] Rewritten length: 2218 chars`
