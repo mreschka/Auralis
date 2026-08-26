@@ -17,4 +17,4 @@ EXPOSE 8502
 
 ENTRYPOINT [ "auralis.openai" ]
 
-CMD [     "--host", "0.0.0.0",     "--port", "8502",     "--model", "AstraMindAI/xttsv2",     "--gpt_model", "AstraMindAI/xtts2-gpt",     "--max_concurrency", "4" ]
+CMD [     "--host", "0.0.0.0",     "--port", "8502",     "--model", "AstraMindAI/xttsv2",     "--gpt_model", "AstraMindAI/xtts2-gpt",     "--max_concurrency", "8" ]

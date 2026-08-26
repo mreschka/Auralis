@@ -1,12 +1,15 @@
 [![](https://dcbadge.limes.pink/api/server/https://discord.gg/BEMVTmcPEs)](https://discord.gg/https://discord.gg/BEMVTmcPEs)
 
-# Auralis 🌌 (/auˈralis/)
+# Auralis for Open WebUI 🌌 (/auˈralis/)
 
-Transform text into natural speech (with voice cloning) at warp speed. Process an entire novel in minutes, not hours.
+Transform text into natural speech (with voice cloning) at warp speed.
+
+This is a fork of the original Auralis optimized for Open WebUI and other interactive chat frameworks. 
+I tried to minimited latency as far as possible and minimize the overhead in Open WebUI.
 
 ---
 
-## What is Auralis? 🚀
+## What is special about this Auralis Fork? 🚀
 
 Auralis is a high-performance text-to-speech engine based on **XTTS-v2** and accelerated by **vLLM** (PagedAttention / FlashAttention) with a native **OpenAI-compatible TTS API**:
 

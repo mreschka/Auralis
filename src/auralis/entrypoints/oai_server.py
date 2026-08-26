@@ -42,7 +42,7 @@ async def lifecycle_manager(app: FastAPI):
         args = argparse.Namespace(
             model='/app/models/xttsv2',
             gpt_model='/app/models/xtts2-gpt',
-            max_concurrency=4,
+            max_concurrency=8,
             vllm_logging_level='warn'
         )
         logging_level = logger_str_to_logging.get(args.vllm_logging_level, logging.WARNING)
@@ -217,7 +217,7 @@ def main():
     parser.add_argument("--port", type=int, default=8502, help="Port to run the server on")
     parser.add_argument("--model", type=str, default='/app/models/xttsv2', help="The base model to run")
     parser.add_argument("--gpt_model", type=str, default='/app/models/xtts2-gpt', help="The gpt model to load alongside the base model, if present")
-    parser.add_argument("--max_concurrency", type=int, default=4, help="The concurrency value that is used in the TTS Engine")
+    parser.add_argument("--max_concurrency", type=int, default=8, help="The concurrency value that is used in the TTS Engine")
     parser.add_argument("--vllm_logging_level", type=str, default='warn', help="The vllm logging level")
 
     args = parser.parse_args()

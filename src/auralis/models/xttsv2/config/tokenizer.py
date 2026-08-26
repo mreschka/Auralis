@@ -170,75 +170,97 @@ def split_sentence(text: str, lang: str, text_split_length: int = 250) -> List[s
         - [`find_best_split_point`][auralis.models.xttsv2.config.tokenizer.find_best_split_point]: Split point finder
         - [`get_spacy_lang`][auralis.models.xttsv2.config.tokenizer.get_spacy_lang]: Language model selector
     """
-    text = text.strip()
-    import re
-    # Split on sentence terminators (. ! ? \n) to enable parallel vLLM batching
-    sentences = [s.strip() for s in re.split(r'(?<=[.!?\n])\s+', text) if s.strip()]
-    if len(sentences) > 1:
-        return sentences
-    if len(text) <= text_split_length:
-        return [text]
+def clean_tts_text(text: str) -> str:
+    """Normalize unicode, strip markdown, and clean formatting for TTS synthesis."""
+    import unicodedata
+    # 1. Normalize unicode (NFKC)
+    text = unicodedata.normalize('NFKC', text)
+    # 2. Replace non-breaking spaces, thin spaces, etc. with normal space
+    text = re.sub(r'[\u00a0\u1680\u180e\u2000-\u200b\u202f\u205f\u3000\ufeff]', ' ', text)
+    # 3. Replace fancy dashes/hyphens with standard hyphen
+    text = re.sub(r'[\u2010-\u2015\u2212]', '-', text)
+    # 4. Remove/replace fancy quotes
+    text = re.sub(r'[„“”«»\"\'`]', '', text)
+    # 5. Remove markdown headers, bold, italics, strikethrough
+    text = re.sub(r'^\s*#+\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\*{1,3}([^\*]+)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,3}([^_]+)_{1,3}', r'\1', text)
+    text = re.sub(r'~~([^~]+)~~', r'\1', text)
+    # 6. Remove markdown links: [label](url) -> label
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    # 7. Convert numbered list starts: '1. ' -> '1) ' to avoid splitting on dot
+    text = re.sub(r'(?m)^(\d+)\.\s*', r'\1) ', text)
+    # 8. Clean up whitespace
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n\s*\n+', '\n', text)
+    return text.strip()
 
-    nlp = get_spacy_lang(lang)
-    if "sentencizer" not in nlp.pipe_names:
-        nlp.add_pipe("sentencizer")
 
-    # Get base sentences using spaCy
-    doc = nlp(text)
-    sentences = list(doc.sents)
+def split_sentence(text: str, lang: str, text_split_length: int = 250) -> List[str]:
+    """Split text into TTS-optimized chunks using sentence-level batching.
+    
+    Cleans markdown, protects dates/abbreviations, and batches at sentence boundaries.
+    """
+    text = clean_tts_text(text)
+    if not text:
+        return []
 
-    splits = []
-    current_split = []
-    current_length = 0
+    # Protect German/English dates like '15. April' or 'March 1st'
+    text = re.sub(
+        r'(\b\d+)\.\s*(Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember|January|February|March|May|June|July|August|September|October|November|December)\b',
+        r'\1_DOT_ \2',
+        text,
+        flags=re.IGNORECASE
+    )
+    # Protect common abbreviations
+    text = re.sub(r'\b(z\.B|d\.h|u\.a|usw|bzw|ca|Dr|Prof|Nr|St|vs)\.\s*', r'\1_DOT_ ', text, flags=re.IGNORECASE)
 
-    for sent in sentences:
-        sentence_text = str(sent).strip()
-        sentence_length = len(sentence_text)
+    # Split paragraphs first
+    paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
 
-        # If sentence fits in current split
-        if current_length + sentence_length <= text_split_length:
-            current_split.append(sentence_text)
-            current_length += sentence_length + 1
+    # Sentence boundary regex (protects digits and floats)
+    sentence_split_regex = re.compile(r'(?<!\d)(?<=[.!?])\s+(?=[A-ZÄÖÜ0-9])')
 
-        # Handle long sentences
-        elif sentence_length > text_split_length:
-            # Add current split if exists
-            if current_split:
-                splits.append(" ".join(current_split))
-                current_split = []
-                current_length = 0
+    chunks = []
+    for para in paragraphs:
+        sents = sentence_split_regex.split(para)
+        for s in sents:
+            s = s.strip()
+            if not s:
+                continue
+            if len(s) <= text_split_length:
+                if re.search(r'[a-zA-Z0-9äöüÄÖÜß]', s):
+                    chunks.append(s)
+            else:
+                # Sub-split long sentence at punctuation or space
+                sub_parts = re.split(r'(?<=[,;])\s+', s)
+                current = ""
+                for part in sub_parts:
+                    if len(current) + len(part) + 1 <= text_split_length:
+                        current = f"{current} {part}".strip()
+                    else:
+                        if current and re.search(r'[a-zA-Z0-9äöüÄÖÜß]', current):
+                            chunks.append(current)
+                        current = part
+                if current and re.search(r'[a-zA-Z0-9äöüÄÖÜß]', current):
+                    chunks.append(current)
 
-            # Split long sentence at optimal points
-            remaining = sentence_text
-            while len(remaining) > text_split_length:
-                split_pos = find_best_split_point(
-                    remaining,
-                    text_split_length,
-                    window_size=30
-                )
-
-                # Add split and continue with remainder
-                splits.append(remaining[:split_pos].strip())
-                remaining = remaining[split_pos:].strip()
-
-            # Handle remaining text
-            if remaining:
-                current_split = [remaining]
-                current_length = len(remaining)
-
-        # Start new split
+    # Merge very short fragments (< 15 chars)
+    merged = []
+    for c in chunks:
+        if merged and len(c) < 15 and not c.endswith(('.', '!', '?')):
+            merged[-1] = f"{merged[-1]} {c}"
+        elif merged and len(merged[-1]) < 15 and not merged[-1].endswith(('.', '!', '?')):
+            merged[-1] = f"{merged[-1]} {c}"
         else:
-            splits.append(" ".join(current_split))
-            current_split = [sentence_text]
-            current_length = sentence_length
+            merged.append(c)
 
-    # Add final split if needed
-    if current_split:
-        splits.append(" ".join(current_split))
+    # Restore placeholders
+    final_chunks = [c.replace('_DOT_', '.') for c in merged if c.strip()]
+    if not final_chunks and text:
+        final_chunks = [text]
 
-    cleaned_sentences = [s[:-1]+' ' if s.endswith('.') else s for s in splits if s] # prevents annoying sounds in italian
-    # Clean up splits
-    return cleaned_sentences
+    return [s[:-1] + ' ' if s.endswith('.') else s for s in final_chunks if s]
 
 _whitespace_re = re.compile(r"\s+")
 
