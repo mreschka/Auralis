@@ -1,6 +1,6 @@
 site_name: Auralis Documentation
 site_description: Documentation for Auralis - A high-performance TTS library
-repo_url: https://github.com/yourusername/Auralis
+repo_url: https://github.com/mreschka/Auralis
 theme:
   name: material
   features:
@@ -69,5 +69,7 @@ nav:
     - Using OAI Server: advanced/using-oai-server.md
     - Performance Tuning: advanced/performance-tuning.md
     - Deployment: advanced/deployment.md
+  - Integrations:
+    - Open WebUI: integrations/open-webui.md
   - Contributing:
     - Documentation: contributing/documentation.md 

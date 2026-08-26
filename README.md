@@ -62,6 +62,16 @@ Auralis provides full OpenAI-compatible API endpoints (`/v1/audio/speech`, `/v1/
 
 3. Save settings. Open WebUI can now synthesize speech and read out assistant responses in real time!
 
+### 🎯 Instant Read-Along Filter (Zero Lag & 1:1 Synchronous Reading)
+
+To achieve **instant voice start (< 1 second)** while keeping text **1:1 readable on screen**, use our dedicated Open WebUI filter:
+
+👉 **[Open WebUI TTS Filter & Guide](integrations/open-webui/README.md)**
+
+* **1:1 Read-Along:** Preserves the exact assistant wording with zero hallucinations or unwanted paraphrasing.
+* **Paragraph Pacing (`\n\n`):** Breaks the first 2–3 sentences into individual short paragraphs so Open WebUI's `Split on: Paragraphs` triggers playback in under 1 second.
+* **Phonetic Expansions:** Expands abbreviations (`z. B.` ➔ `zum Beispiel`, `bzw.` ➔ `beziehungsweise`) and currency/units (`€` ➔ `Euro`, `%` ➔ `Prozent`).
+
 ---
 
 ## 🎙️ Voice Cloning Guidelines & Best Practices

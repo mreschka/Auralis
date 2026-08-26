@@ -57,6 +57,7 @@ Check out our [Quick Start Guide](getting-started/quickstart.md) to begin using 
 
 ## Documentation
 
+- [Open WebUI Integration](integrations/open-webui.md): Open WebUI setup & 1:1 Read-Along Filter
 - [Performance Tuning](advanced/performance-tuning.md): Optimize for production
 - [Deployment Guide](advanced/deployment.md): Deploy in production
 - [Adding Models](advanced/adding-models.md): Extend with your models
