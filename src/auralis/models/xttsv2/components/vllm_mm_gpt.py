@@ -105,8 +105,6 @@ class PositionalEmbeddingsCorrecter:
                 request_id = self.token_to_request[token_key]
                 prefill_lengths.append(self.request_tracker_dict[request_id].update_(token_id=next_token_id))
 
-        if not prefill_lengths:
-            raise ValueError(f"No valid mappings found for token pairs")
         return prefill_lengths
 
     def _invalidate_previous_mapping(self, request_id: str):
@@ -200,6 +198,9 @@ class LearnedPositionEmbeddings(nn.Module):
             Position embeddings tensor matching input shape plus embedding dimension
             Shape: [batch_size, seq_len, model_dim] or [1, 1, model_dim]
         """
+        if ind is None:
+            return self.emb(torch.zeros(1, dtype=torch.long, device=dev)).unsqueeze(0)
+
         # Validation of indices to prevent unknown errors
         assert (ind < self.seq_len).all(), \
             f"Position indices out of range. Found max={ind.max().item()}, but maximum allowed is {self.seq_len-1}"
