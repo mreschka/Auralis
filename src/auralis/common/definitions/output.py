@@ -139,15 +139,10 @@ class TTSOutput:
         buffer = io.BytesIO()
 
         if format in ['wav', 'flac']:
-            torchaudio.save(
-                buffer,
-                wav_tensor,
-                self.sample_rate,
-                format=format,
-                encoding="PCM_S" if sample_width == 2 else "PCM_F",
-                bits_per_sample=sample_width * 8,
-                compression = CodecConfig(compression_level=min(8, self.compression)) if format == 'flac' else None
-            )
+            import soundfile as sf
+            arr = wav_tensor.squeeze(0).cpu().numpy()
+            sf.write(buffer, arr, self.sample_rate, format='WAV' if format == 'wav' else 'FLAC', subtype='PCM_16' if sample_width == 2 else 'FLOAT')
+            return buffer.getvalue()
         elif format == 'mp3':
             torchaudio.save(
                 buffer,

@@ -740,6 +740,20 @@ def korean_transliterate(text, transliter):
 # Fast Tokenizer Class
 
 class XTTSTokenizerFast(PreTrainedTokenizerFast):
+    @property
+    def all_special_tokens_extended(self):
+        tokens = []
+        for attr in ['unk_token', 'pad_token', 'bos_token', 'eos_token']:
+            val = getattr(self, attr, None)
+            if val is not None:
+                tokens.append(val)
+        return tokens
+
+    @property
+    def all_special_tokens(self):
+        return [str(t) for t in self.all_special_tokens_extended]
+
+
     """
     Fast Tokenizer implementation for XTTS model using HuggingFace's PreTrainedTokenizerFast
     """
