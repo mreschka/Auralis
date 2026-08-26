@@ -1,42 +1,47 @@
 # Open WebUI ➔ Auralis TTS Integration & Read-Along Filter 🎧
 
-This directory provides the **TTS Read-Along & Paragraph Optimizer Filter** (v1.2.0) for Open WebUI.
+This directory provides the **TTS Read-Along & Paragraph Optimizer Filter** (v2.1.0) for Open WebUI.
 
 ---
 
-## 🎯 Purpose & Two-Tier Architecture
+## 🎯 Purpose & Key Features
 
-When synthesizing speech from LLM responses in Open WebUI, raw markdown, numbers/currencies, and lack of paragraph pacing cause stuttering or long delays.
+When synthesizing speech from LLM responses in Open WebUI, raw markdown, numbers/currencies, and visual emojis cause stuttering or unnatural pauses.
 
-This filter implements a **two-tier optimization pipeline**:
+This filter provides a **two-tier optimization pipeline**:
 
 ```mermaid
 graph TD
-    A[Assistant Response] --> B{Task Model / Mode}
-    B -->|outlet_task_model| C[LLM Rewrite & Paragraph Structuring]
-    B -->|inlet_prompt_injection| D[System Prompt Injection]
-    B -->|rule_based_only| E[Fast Direct Path]
-    C --> F[Markdown-Aware & Phonetic Sanitizer]
-    D --> F
-    E --> F
-    F --> G[1. Currency & Units: $ 3.7 billion -> 3.7 billion Dollar]
-    F --> H[2. Emojis & Symbols: ⚡ -> Blitz-Symbol, ✓ -> Häkchen]
-    F --> I[3. Markdown-Aware Cleaning: Strips raw **, *, code tags]
-    F --> J[4. Paragraph Pacing: First 2-3 sentences as standalone paragraphs]
-    J --> K[Open WebUI TTS Engine -> Instant Audio Playback in < 1s]
+    A[Assistant Response] --> B[_sanitize_and_clean: Pre-pass]
+    B --> C[1. Demojize: Emojis to text via multilingual emoji library]
+    B --> D[2. Symbols: -> to bedeutet, ≈ to ungefähr, => to daraus folgt]
+    B --> E[3. Markdown: Strips headers, blockquotes, raw formatting]
+    C & D & E --> F{use_task_model?}
+    F -->|True| G[Task Model LLM: 1:1 Read-Along Restructuring & List Pacing]
+    F -->|False| H[Direct Sanitized Output]
+    G --> I[_sanitize_and_clean: Post-pass whitespace normalization]
+    I & H --> J[Open WebUI Audio -> Auralis TTS Engine]
 ```
 
-1. **1:1 Synchronous Read-Along:** Preserves the assistant's exact original text without hallucinating or altering sentences, allowing users to comfortably read along on-screen while listening.
-2. **Markdown-Aware Cleaning:** Utilizes Markdown and HTML parsing (`markdown` + `BeautifulSoup`, built directly into Open WebUI) to reliably clean visual Markdown artifacts (`**`, `*`, `__`, code fences, horizontal lines) without breaking sentence boundaries.
-3. **Phonetic Expansions:**
-   * **Currencies & Units:** Expands `€ 1 250 000` ➔ `1 250 000 Euro`, `$ 3.7 billion` ➔ `3.7 billion Dollar`, `£ 750 000` ➔ `750 000 Pfund`, `%` ➔ `Prozent`, `°C` ➔ `Grad Celsius`.
-   * **Emojis & Symbols:** Expands `⚡` ➔ `Blitz-Symbol`, `💡` ➔ `Glühbirnen-Symbol`, `✓` ➔ `Häkchen`, `✗` ➔ `Kreuz`, `©` ➔ `Copyright`, `™` ➔ `Trademark`, `#Tag` ➔ `Hashtag Tag`.
-   * **Abbreviations:** Expands `z. B.` ➔ `zum Beispiel`, `bzw.` ➔ `beziehungsweise`, `d. h.` ➔ `das heißt`, `ca.` ➔ `circa`, `e.g.` ➔ `for example`.
-4. **Paragraph Pacing (`\n\n`):** Breaks the first 2–3 sentences into individual short starter paragraphs so Open WebUI's `Split on: Paragraphs` triggers playback in under 1 second.
+1. **1:1 Synchronous Read-Along:** Preserves exact assistant wording so the user can comfortably read along on-screen while listening.
+2. **Multilingual Emoji-to-Speech (`emoji.demojize`):**  
+   Automatically detects user language (`de`, `en`, `es`, `fr`, etc.) and translates emojis into readable text (e.g. `🚀` ➔ `Rakete`, `😃` ➔ `Grinsendes Gesicht`) instead of breaking the TTS engine.
+3. **Contextual Symbol Translation:**  
+   Translates symbols according to their semantic meaning (`→` ➔ `bedeutet`, `≈` ➔ `ungefähr`, `=>` ➔ `daraus folgt`) rather than awkward literal words.
+4. **Natural List Pacing:**  
+   Removes unreadable bullet markers (`-`, `*`) and appends breathing periods (`.`) to short list points so XTTS speaks them with natural intonation.
+5. **Exact Number & Date Preservation:**  
+   Strictly retains digits, versions, dates, and IP addresses as numbers (`2026`, `3.12`, `15. April`) for native XTTS phonemization.
 
 ---
 
-## 🚀 Setup & Configuration in Open WebUI
+## 🚀 Prerequisites & Installation in Open WebUI
+
+### Prerequisite: `emoji` Library
+Inside the Open WebUI environment / container, install the `emoji` package:
+```bash
+pip install emoji
+```
 
 ### Step 1: Import the Filter Function
 1. In Open WebUI, navigate to **Workspace ➔ Functions** (or **Admin Panel ➔ Functions**).
@@ -52,11 +57,11 @@ graph TD
 
 | Valve / Setting | Default | Description |
 | :--- | :--- | :--- |
-| **`mode`** | `outlet_task_model` | `outlet_task_model` (rewrites via task model), `inlet_prompt_injection` (direct system prompt), or `rule_based_only` (instant deterministic sanitizer) |
-| **`task_model`** | `gemma3:4b` | Fast task model (e.g. `gemma3:4b`, `llama3.2:3b`) |
+| **`use_task_model`** | `True` | Uses fast LLM task model for list restructuring and speech prosody |
+| **`task_model`** | `gemma3:4b` | Fast task model name (e.g. `gemma3:4b`, `llama3.2:3b`) |
 | **`task_api_url`** | `http://localhost:11434/v1` | **Must point to your Ollama / LLM endpoint** (e.g. `http://<ollama-host-ip>:11434/v1` or `http://host.docker.internal:11434/v1`). Note: `localhost` inside a Docker container refers to the container itself! |
 | **`task_api_key`** | `ollama` | API key if authentication is required |
-| **`clean_markdown`** | `True` | Enables Markdown-aware parsing to strip visual markdown artifacts |
+| **`clean_markdown`** | `True` | Enables Markdown stripping (headers, bold, italics, code) for clean speech |
 | **`debug`** | `True` | Outputs verbose logs to Open WebUI Docker console (`docker logs -f open-webui`) |
 
 ### Step 3: Configure Open WebUI Audio Settings
@@ -79,13 +84,12 @@ graph TD
 
 ## 🔍 Debugging & Log Inspection
 
-To watch the filter in real time:
+To monitor the filter live in Open WebUI:
 
 ```bash
 docker logs -f open-webui | grep "TTS-FILTER"
 ```
 
-Output format:
-* `[TTS-FILTER] Outlet triggered for model 'gemma3:4b' at 'http://...'`
-* `[TTS-FILTER] Original message length: 2363 chars`
-* `[TTS-FILTER SUCCESS] Rewritten length: 2218 chars`
+Sample output:
+* `[TTS-FILTER] Outlet triggered for model 'gemma3:4b'`
+* `[TTS-FILTER] Detected user language for Emojis: de`
