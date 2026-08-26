@@ -1,0 +1,25 @@
+services:
+  auralis:
+    build: .
+    image: auralis:latest
+    container_name: auralis
+    restart: unless-stopped
+    ports:
+      - "8502:8502"
+    volumes:
+      # Mount local models cache directory (or remove to download from HuggingFace on first start)
+      - ./models:/app/models:ro
+      # Mount custom voice samples directory (.wav files)
+      - ./voices:/app/voices:ro
+    environment:
+      # Select target GPU(s) or all
+      - NVIDIA_VISIBLE_DEVICES=all
+      # Target vLLM GPU memory utilization (0.45 recommended when sharing GPU with other LLMs)
+      - VLLM_GPU_MEMORY_UTILIZATION=0.45
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
