@@ -63,6 +63,12 @@ async def lifecycle_manager(app: FastAPI):
     yield
     if tts_engine is not None:
         await tts_engine.shutdown()
+    try:
+        import torch.distributed as dist
+        if dist.is_available() and dist.is_initialized():
+            dist.destroy_process_group()
+    except Exception:
+        pass
 
 app = FastAPI(lifespan=lifecycle_manager)
 

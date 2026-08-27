@@ -845,4 +845,10 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
 
     async def shutdown(self):
         self.llm_engine.shutdown_background_loop()
+        try:
+            import torch.distributed as dist
+            if dist.is_available() and dist.is_initialized():
+                dist.destroy_process_group()
+        except Exception:
+            pass
 
