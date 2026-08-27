@@ -752,6 +752,11 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
         generators = []
         requests_id = []
         for seq_index, sequence in enumerate(tokens_list):
+            # Dynamic max audio tokens based on text length to prevent runaway hallucination on short phrases
+            dynamic_max_tokens = min(
+                self.gpt_config.gpt_max_audio_tokens,
+                max(100, int(len(sequence) * 24 + 80))
+            )
             sampling_params = ExtendedSamplingParams(
                 temperature=request.temperature,
                 top_p=request.top_p,
@@ -760,7 +765,7 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
                 top_k=request.top_k,
                 logits_processors=[LogitsRepetitionPenalizer(request.repetition_penalty)],
                 repetition_penalty=1.0,  # Since we're handling repetition penalty manually
-                max_tokens=self.gpt_config.gpt_max_audio_tokens,
+                max_tokens=dynamic_max_tokens,
                 ignore_eos=True,  # Ignore the tokenizer eos token since it is for textual generation
                 stop_token_ids=[self.mel_eos_token_id],
                 output_kind=RequestOutputKind.FINAL_ONLY
