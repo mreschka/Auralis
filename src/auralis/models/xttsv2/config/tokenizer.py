@@ -260,7 +260,7 @@ def split_sentence(text: str, lang: str, text_split_length: int = 250) -> List[s
     if not final_chunks and text:
         final_chunks = [text]
 
-    return [s[:-1] + ' ' if s.endswith('.') else s for s in final_chunks if s]
+    return [s.strip() for s in final_chunks if s.strip()]
 
 _whitespace_re = re.compile(r"\s+")
 
