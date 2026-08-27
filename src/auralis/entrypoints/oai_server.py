@@ -3,6 +3,8 @@ import base64
 import json
 import logging
 import os
+import re
+import struct
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -103,6 +105,34 @@ async def list_voices():
         voices = [{"id": "markus", "name": "markus"}]
     return {"voices": voices}
 
+import struct
+
+def generate_silence_wav(duration_s: float = 0.1, sample_rate: int = 24000) -> bytes:
+    """Generate a valid, tiny silent PCM WAV byte stream."""
+    num_samples = int(sample_rate * duration_s)
+    num_channels = 1
+    bits_per_sample = 16
+    byte_rate = sample_rate * num_channels * bits_per_sample // 8
+    block_align = num_channels * bits_per_sample // 8
+    data_size = num_samples * block_align
+    header = struct.pack(
+        '<4sI4s4sIHHIIHH4sI',
+        b'RIFF',
+        36 + data_size,
+        b'WAVE',
+        b'fmt ',
+        16,
+        1,  # PCM
+        num_channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        bits_per_sample,
+        b'data',
+        data_size
+    )
+    return header + b'\x00' * data_size
+
 @app.post("/v1/audio/speech")
 async def generate_audio(request: AudioSpeechGenerationRequest):
     if tts_engine is None:
@@ -114,6 +144,12 @@ async def generate_audio(request: AudioSpeechGenerationRequest):
         if should_normalize:
             request.input = normalizer.normalize(raw_text, lang=request.language)
             logger.info(f"[NORMALIZER] Input: '{raw_text}' -> Output: '{request.input}'")
+
+        # Check if text is empty or contains no speakable characters (e.g. '---' or whitespace)
+        if not request.input or not re.search(r'[a-zA-Z0-9äöüÄÖÜß]', request.input):
+            logger.info(f"[NORMALIZER] Input '{raw_text}' has no speakable characters, returning silence.")
+            silence_bytes = generate_silence_wav(duration_s=0.1)
+            return Response(content=silence_bytes, media_type="audio/wav")
 
         tts_request = request.to_tts_request()
         output = await tts_engine.generate_speech_async(tts_request)
