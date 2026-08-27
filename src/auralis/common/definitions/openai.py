@@ -135,6 +135,7 @@ class AudioSpeechGenerationRequest(BaseModel):
         default='wav', description="Audio response format"
     )
     speed: float = Field(default=1.0, description="Speech speed")
+    stream: bool = Field(default=False, description="Enable chunked audio streaming response")
 
     enhance_speech: bool = Field(default=tts_defaults['enhance_speech'])
     normalize: Optional[bool] = Field(default=None, description="Enable or disable text normalization/phonetization for this request")
@@ -161,7 +162,7 @@ class AudioSpeechGenerationRequest(BaseModel):
         speaker_data_list = [base64.b64decode(f) for f in self.voice]
         return TTSRequest(
             text=self.input,
-            stream=False,
+            stream=self.stream,
             speaker_files=speaker_data_list,
             enhance_speech=self.enhance_speech,
             language=self.language,

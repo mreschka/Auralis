@@ -160,8 +160,15 @@ class TextNormalizer:
 
         # 6. Markdown cleaning (preserving math operators)
         if self.clean_markdown:
-            # Code block fences
-            text = re.sub(r'```[a-zA-Z0-9_-]*\n?', '', text)
+            # Code blocks -> audible notice
+            code_notice = ' Code-Block übersprungen. ' if target_lang == 'de' else ' Code block skipped. '
+            text = re.sub(r'```[\s\S]*?```', code_notice, text)
+            text = re.sub(r'```', '', text)
+
+            # Markdown tables -> audible notice
+            table_notice = ' Tabelle übersprungen. ' if target_lang == 'de' else ' Table skipped. '
+            text = re.sub(r'(?:^\|.*\|\r?\n)+', table_notice, text, flags=re.MULTILINE)
+
             text = re.sub(r'^\s*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
             text = re.sub(r'^\s*#+\s*', '', text, flags=re.MULTILINE)
             text = re.sub(r'^\s*>\s*', '', text, flags=re.MULTILINE)
