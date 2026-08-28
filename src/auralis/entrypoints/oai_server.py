@@ -152,7 +152,7 @@ async def generate_audio(request: AudioSpeechGenerationRequest):
             logger.info(f"[NORMALIZER] Input: '{raw_text}' -> Output: '{request.input}'")
 
         # Check if text is empty or contains no speakable characters (e.g. '---' or whitespace)
-        if not request.input or not re.search(r'[a-zA-Z0-9äöüÄÖÜß]', request.input):
+        if not request.input or not re.search(r'\w', request.input, flags=re.UNICODE):
             logger.info(f"[NORMALIZER] Input '{raw_text}' has no speakable characters, returning silence.")
             silence_bytes = generate_silence_wav(duration_s=0.1)
             return Response(content=silence_bytes, media_type="audio/wav")

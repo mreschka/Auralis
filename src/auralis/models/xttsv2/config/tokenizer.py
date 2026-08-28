@@ -231,7 +231,7 @@ def split_sentence(text: str, lang: str, text_split_length: int = 600) -> List[s
             if not s:
                 continue
             if len(s) <= text_split_length:
-                if re.search(r'[a-zA-Z0-9äöüÄÖÜß]', s):
+                if re.search(r'\w', s, flags=re.UNICODE):
                     chunks.append(s)
             else:
                 # Sub-split only exceptionally long sentences (> 600 chars) at semicolons or commas
@@ -241,10 +241,10 @@ def split_sentence(text: str, lang: str, text_split_length: int = 600) -> List[s
                     if len(current) + len(part) + 1 <= text_split_length:
                         current = f"{current} {part}".strip()
                     else:
-                        if current and re.search(r'[a-zA-Z0-9äöüÄÖÜß]', current):
+                        if current and re.search(r'\w', current, flags=re.UNICODE):
                             chunks.append(current)
                         current = part
-                if current and re.search(r'[a-zA-Z0-9äöüÄÖÜß]', current):
+                if current and re.search(r'\w', current, flags=re.UNICODE):
                     chunks.append(current)
 
     # 5. Merge very short fragments (< 15 chars) only if they are not standalone sentences

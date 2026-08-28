@@ -446,7 +446,7 @@ class TextNormalizer:
                 supported_emoji_langs = ["en", "es", "pt", "it", "fr", "de", "ja", "ko", "zh", "ru", "ar"]
                 emoji_lang = target_lang if target_lang in supported_emoji_langs else "en"
                 text = emoji.demojize(text, language=emoji_lang)
-                text = re.sub(r':([a-zA-Z0-9äöüÄÖÜß_]+):', lambda m: ' ' + m.group(1).replace('_', ' ') + ' ', text)
+                text = re.sub(r':(\w+):', lambda m: ' ' + m.group(1).replace('_', ' ') + ' ', text, flags=re.UNICODE)
             except Exception:
                 text = self._emoji_pattern.sub('', text)
         else:
