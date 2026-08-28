@@ -196,29 +196,31 @@ def clean_tts_text(text: str) -> str:
     return text.strip()
 
 
-def split_sentence(text: str, lang: str, text_split_length: int = 250) -> List[str]:
+def split_sentence(text: str, lang: str, text_split_length: int = 600) -> List[str]:
     """Split text into TTS-optimized chunks using sentence-level batching.
     
-    Cleans markdown, protects dates/abbreviations, and batches at sentence boundaries.
+    Cleans markdown, protects dates, ordinals, and abbreviations, and batches strictly at natural sentence boundaries.
     """
     text = clean_tts_text(text)
     if not text:
         return []
 
-    # Protect German/English dates like '15. April' or 'March 1st'
+    # 1. Protect ordinals and dates like '19. Jahrhundert', '20. Jh.', '15. April', etc.
     text = re.sub(
-        r'(\b\d+)\.\s*(Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember|January|February|March|May|June|July|August|September|October|November|December)\b',
-        r'\1_DOT_ \2',
+        r'\b(\d+)\.\s*(Jahrhundert|Jh\.|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember|Januar|Februar|January|February|March|May|June|July|August|September|October|November|December|Klasse|Platz|Teil|Abschnitt|Kapitel)\b',
+        r'\1_ORD_ \2',
         text,
         flags=re.IGNORECASE
     )
-    # Protect common abbreviations
-    text = re.sub(r'\b(z\.B|d\.h|u\.a|usw|bzw|ca|Dr|Prof|Nr|St|vs)\.\s*', r'\1_DOT_ ', text, flags=re.IGNORECASE)
+    # 2. Protect list starts '1) ', '2) '
+    text = re.sub(r'\b(\d+)\.\s+', r'\1) ', text)
+    # 3. Protect common abbreviations
+    text = re.sub(r'\b(z\.B|d\.h|u\.a|usw|bzw|ca|Dr|Prof|Nr|St|vs|e\.g|i\.e|etc)\.\s*', r'\1_DOT_ ', text, flags=re.IGNORECASE)
 
-    # Split paragraphs first
+    # 4. Split paragraphs
     paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
 
-    # Sentence boundary regex (protects digits and floats)
+    # Sentence boundary regex (strictly matches .!? followed by whitespace and uppercase letter/number)
     sentence_split_regex = re.compile(r'(?<!\d)(?<=[.!?])\s+(?=[A-ZÄÖÜ0-9])')
 
     chunks = []
@@ -232,8 +234,8 @@ def split_sentence(text: str, lang: str, text_split_length: int = 250) -> List[s
                 if re.search(r'[a-zA-Z0-9äöüÄÖÜß]', s):
                     chunks.append(s)
             else:
-                # Sub-split long sentence at punctuation or space
-                sub_parts = re.split(r'(?<=[,;])\s+', s)
+                # Sub-split only exceptionally long sentences (> 600 chars) at semicolons or commas
+                sub_parts = re.split(r'(?<=[;])\s+|(?<=[,])\s+(?=[A-ZÄÖÜa-z0-9])', s)
                 current = ""
                 for part in sub_parts:
                     if len(current) + len(part) + 1 <= text_split_length:
@@ -245,7 +247,7 @@ def split_sentence(text: str, lang: str, text_split_length: int = 250) -> List[s
                 if current and re.search(r'[a-zA-Z0-9äöüÄÖÜß]', current):
                     chunks.append(current)
 
-    # Merge very short fragments (< 15 chars)
+    # 5. Merge very short fragments (< 15 chars) only if they are not standalone sentences
     merged = []
     for c in chunks:
         if merged and len(c) < 15 and not c.endswith(('.', '!', '?')):
@@ -255,8 +257,8 @@ def split_sentence(text: str, lang: str, text_split_length: int = 250) -> List[s
         else:
             merged.append(c)
 
-    # Restore placeholders
-    final_chunks = [c.replace('_DOT_', '.') for c in merged if c.strip()]
+    # 6. Restore placeholders
+    final_chunks = [c.replace('_ORD_', '.').replace('_DOT_', '.') for c in merged if c.strip()]
     if not final_chunks and text:
         final_chunks = [text]
 

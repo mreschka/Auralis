@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Tuple
 try:
     from auralis.common.i18n import get_locale, SUPPORTED_LANGUAGES
 except ImportError:
-    from i18n import get_locale, SUPPORTED_LANGUAGES
+    from i18n_v2 import get_locale, SUPPORTED_LANGUAGES
 
 try:
     from markdown_it import MarkdownIt
@@ -35,6 +35,7 @@ class TextNormalizer:
     - AST-based Markdown transformation inspired by Robin-Reiche/markdown-read-aloud
     - Task-model 1-sentence code summarization in the requested language via local Ollama
     - Deterministic 0ms spoken table formatting with localized headers and row counters
+    - Robust ordered list numbering (1), 2), 3)) and intonation protection
     - Localized date expansions, units, currencies, technical pronunciations, and emojis
     """
 
@@ -214,6 +215,7 @@ class TextNormalizer:
             return text
 
         blocks: List[str] = []
+        list_stack: List[Dict] = []  # Track ordered/unordered list depth and counters
         i = 0
         while i < len(tokens):
             t = tokens[i]
@@ -228,7 +230,7 @@ class TextNormalizer:
                 inline_tok = tokens[i+1]
                 t_text = self._render_inline_tokens(inline_tok.children or [inline_tok], loc).strip()
                 if t_text:
-                    blocks.append(t_text)
+                    blocks.append(t_text if t_text.endswith(('.', '!', '?', ':')) else t_text + '.')
                 i += 3
                 continue
             elif t.type == 'fence':
@@ -270,20 +272,48 @@ class TextNormalizer:
                 blocks.append(' '.join(parts))
                 i += 1
                 continue
+            elif t.type == 'ordered_list_open':
+                start_num = 1
+                if t.attrs:
+                    for k, v in t.attrs:
+                        if k == 'start':
+                            start_num = int(v)
+                list_stack.append({'type': 'ol', 'count': start_num})
+                i += 1
+                continue
+            elif t.type == 'ordered_list_close':
+                if list_stack and list_stack[-1]['type'] == 'ol':
+                    list_stack.pop()
+                i += 1
+                continue
+            elif t.type == 'bullet_list_open':
+                list_stack.append({'type': 'ul'})
+                i += 1
+                continue
+            elif t.type == 'bullet_list_close':
+                if list_stack and list_stack[-1]['type'] == 'ul':
+                    list_stack.pop()
+                i += 1
+                continue
             elif t.type == 'list_item_open':
+                # Collect item contents until list_item_close
                 j = i + 1
-                item_text = ''
+                item_parts = []
                 while j < len(tokens) and tokens[j].type != 'list_item_close':
                     if tokens[j].type == 'inline':
-                        item_text += self._render_inline_tokens(tokens[j].children or [tokens[j]], loc)
+                        item_parts.append(self._render_inline_tokens(tokens[j].children or [tokens[j]], loc))
                     j += 1
-                item_text = item_text.strip()
+                item_text = ' '.join(item_parts).strip()
                 if item_text.startswith('[x] ') or item_text.startswith('[X] '):
                     item_text = f"{loc['done_prefix']} {item_text[4:]}"
                 elif item_text.startswith('[ ] '):
                     item_text = f"{loc['todo_prefix']} {item_text[4:]}"
+                elif list_stack and list_stack[-1]['type'] == 'ol':
+                    count = list_stack[-1]['count']
+                    item_text = f"{count}) {item_text}"
+                    list_stack[-1]['count'] += 1
                 if item_text:
-                    blocks.append(item_text)
+                    blocks.append(item_text if item_text.endswith(('.', '!', '?', ':')) else item_text + '.')
                 i = j + 1
                 continue
             else:
@@ -398,11 +428,19 @@ class TextNormalizer:
         for k, v in self._keycaps.items():
             text = text.replace(k, v)
 
-        # 3. Named functional symbols for this locale
+        # 3. Unicode Normalization (NFKC)
+        text = unicodedata.normalize('NFKC', text)
+
+        # 4. Non-breaking spaces and typography normalization
+        text = re.sub(r'[\u00a0\u1680\u180e\u2000-\u200b\u202f\u205f\u3000\ufeff]', ' ', text)
+        text = re.sub(r'[\u2010-\u2015\u2212]', '-', text)
+        text = re.sub(r'[„“”«»\"\'`]', '', text)
+
+        # 5. Named functional symbols for this locale (e.g. + -> plus)
         for pattern, repl in loc.get("symbols", []):
             text = re.sub(pattern, repl, text)
 
-        # 4. Multilingual Emoji translation / demojize
+        # 6. Multilingual Emoji translation / demojize
         if HAS_EMOJI:
             try:
                 supported_emoji_langs = ["en", "es", "pt", "it", "fr", "de", "ja", "ko", "zh", "ru", "ar"]
@@ -413,14 +451,6 @@ class TextNormalizer:
                 text = self._emoji_pattern.sub('', text)
         else:
             text = self._emoji_pattern.sub('', text)
-
-        # 5. Unicode Normalization (NFKC)
-        text = unicodedata.normalize('NFKC', text)
-
-        # 6. Non-breaking spaces and typography normalization
-        text = re.sub(r'[\u00a0\u1680\u180e\u2000-\u200b\u202f\u205f\u3000\ufeff]', ' ', text)
-        text = re.sub(r'[\u2010-\u2015\u2212]', '-', text)
-        text = re.sub(r'[„“”«»\"\'`]', '', text)
 
         # 7. Language-aware date normalization
         text = self._normalize_dates(text, target_lang, loc)
