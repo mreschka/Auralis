@@ -157,6 +157,24 @@ curl -X POST http://localhost:8502/v1/audio/speech \
 
 ---
 
+## 🎙️ Intelligent Markdown-AST & Phonetical Normalizer
+
+Auralis includes a high-performance **Markdown-AST and phonetic pre-processor** designed specifically for natural, podcast-quality text-to-speech without client-side text stripping:
+
+* **AST-Based Markdown Parsing:** Leverages `markdown-it-py` to parse CommonMark and GitHub Flavored Markdown (GFM) token streams without fragile regex chains.
+* **Intelligent Code-Block Summarization:** Code snippets are automatically detected and summarized into 1–2 natural spoken sentences via a local Ollama task model (e.g. `gemma3:4b`), introduced with e.g. *„Zusammenfassung des Python-Codes:...“*.
+* **Deterministic 0ms Table Reader:** Markdown tables are converted into structured, conversational spoken rows (*„Tabelle mit 3 Spalten. Überschriften: ... Zeile 1: ...“*) in sub-millisecond time.
+* **Image Alt-Text Spoken:** Image tags `![Alt-Text](image.png)` are cleanly read aloud as *„Bild: Alt-Text“*.
+* **Task Lists & Formatting:** Checklists (`- [x]` ➔ *„Erledigt: ...“*, `- [ ]` ➔ *„Offen: ...“*) and markdown styles are transformed for the human ear.
+* **Technical Pronunciation Dictionary:** IT acronyms and terms (`nginx` ➔ *„Engine X“*, `k8s` ➔ *„Kubernetes“*, `sql` ➔ *„S-Q-L“*, `yaml` ➔ *„Jammel“*) are pronounced naturally.
+* **Phonetic Normalization:** Full multilingual Emoji demojization (`😃` ➔ *„Freude“*), German date expansion (`27.08.2026` ➔ *„27. August 2026“*), metric/imperial unit expansion (`1,4 kg` ➔ *„1,4 Kilogramm“*, `3 lb` ➔ *„3 Pfund“*), and currency conversion.
+
+> **Credits & Acknowledgements:**  
+> The AST-based Markdown extraction and pronunciation mapping concepts in this fork are inspired by and adapted from the open-source project [**`Robin-Reiche/markdown-read-aloud`**](https://github.com/Robin-Reiche/markdown-read-aloud) (licensed under MIT).
+
+---
+
 ## License
 
 This project is licensed under the Apache 2.0 License.
+
