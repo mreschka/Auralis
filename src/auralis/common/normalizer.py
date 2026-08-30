@@ -144,6 +144,14 @@ class TextNormalizer:
         return None
 
     def _summarize_code(self, code_full: str, lang_tag: str, target_lang: str, loc: Dict) -> str:
+        lines = [l for l in code_full.strip().split('\n') if l.strip()]
+        # For short CLI commands or 1-2 line snippets, speak directly in 0ms without waiting for LLM
+        if len(lines) <= 2 or len(code_full.strip()) <= 90:
+            content = " ".join(lines)
+            is_cmd = lang_tag.lower() in ("cmd", "bash", "sh", "powershell", "zsh", "shell") or not lang_tag
+            prefix = "Befehl:" if is_cmd and target_lang == "de" else ("Command:" if is_cmd else ("Code:" if target_lang == "de" else "Code:"))
+            return f"{prefix} {content}"
+
         if self.enable_llm_summary:
             prompt = loc["task_prompt"].format(code=code_full)
             summary = self._call_task_model(prompt)
@@ -257,9 +265,15 @@ class TextNormalizer:
             elif t.type == 'ordered_list_open':
                 start_num = 1
                 if t.attrs:
-                    for k, v in t.attrs:
-                        if k == 'start':
-                            start_num = int(v)
+                    if isinstance(t.attrs, dict):
+                        start_num = int(t.attrs.get('start', 1))
+                    elif isinstance(t.attrs, list):
+                        for item in t.attrs:
+                            if isinstance(item, (list, tuple)) and len(item) == 2 and item[0] == 'start':
+                                try:
+                                    start_num = int(item[1])
+                                except Exception:
+                                    pass
                 list_stack.append({'type': 'ol', 'count': start_num})
                 i += 1
                 continue
