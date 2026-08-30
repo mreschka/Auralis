@@ -7,6 +7,7 @@ import re
 import struct
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 import aiohttp
@@ -60,6 +61,33 @@ async def lifecycle_manager(app: FastAPI):
         )
         logging_level = logger_str_to_logging.get(args.vllm_logging_level, logging.WARNING)
         start_tts_engine(args, logging_level)
+
+    # Pre-warm all voice conditioning latents & run a 1-word warmup pass to pre-compile CUDA & Vocoder
+    try:
+        voices_dir = Path("/app/voices") if Path("/app/voices").exists() else Path("voices")
+        if voices_dir.exists() and tts_engine is not None and hasattr(tts_engine, "tts_engine"):
+            voice_files = list(voices_dir.glob("*.wav"))
+            for vf in voice_files:
+                try:
+                    logger.info(f"[WARMUP] Pre-caching voice conditioning for {vf.stem}...")
+                    await tts_engine.tts_engine.get_audio_conditioning([str(vf)])
+                except Exception as ve:
+                    logger.warning(f"[WARMUP] Could not pre-cache voice {vf}: {ve}")
+
+            if voice_files:
+                logger.info(f"[WARMUP] Running dummy synthesis to warm up CUDA kernels & HiFi-GAN Vocoder...")
+                from auralis.common.definitions.requests import TTSRequest
+                warmup_req = TTSRequest(
+                    text="Bereit.",
+                    language="de",
+                    speaker_files=[str(voice_files[0])],
+                    stream=False
+                )
+                await tts_engine.generate_speech_async(warmup_req)
+                logger.info("[WARMUP] Startup warm-up complete! Sub-second TTFT is now active.")
+    except Exception as we:
+        logger.warning(f"[WARMUP] Startup warm-up note: {we}")
+
     yield
     if tts_engine is not None:
         await tts_engine.shutdown()
