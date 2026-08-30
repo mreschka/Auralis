@@ -9,7 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from pathlib import Path
-from typing import Optional, List, Tuple, Union, AsyncGenerator
+from typing import Optional, List, Tuple, Union, AsyncGenerator, Callable, Any
 from concurrent.futures import ThreadPoolExecutor
 
 import librosa
@@ -781,13 +781,14 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
                     }
                 }
             request_id =f"{request.request_id}_{seq_index}"
-            # Get audio token generator from VLLM
-            token_generator = self.llm_engine.generate(
-                prompt=engine_inputs,
-                sampling_params=sampling_params,
-                request_id=request_id,
-            )
-            generators.append(token_generator)
+            # Create a lazy generator closure so VLLM is not flooded with all sequences at once
+            def make_token_generator(inputs=engine_inputs, params=sampling_params, req_id=request_id):
+                return self.llm_engine.generate(
+                    prompt=inputs,
+                    sampling_params=params,
+                    request_id=req_id,
+                )
+            generators.append(make_token_generator)
             requests_id.append(request_id)
 
         return generators, requests_id, speaker_embeddings, gpt_embed_inputs
@@ -795,7 +796,7 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
     @torch.inference_mode()
     async def process_tokens_to_speech(
             self,
-            generator: AsyncGenerator[RequestOutput, None],
+            generator: Union[AsyncGenerator[RequestOutput, None], Callable],
             speaker_embeddings: Optional[torch.Tensor] = None,
             multimodal_data: Optional[torch.Tensor] = None,
             request: TTSRequest = None,
@@ -803,7 +804,7 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
         """Convert generated tokens to speech waveforms.
 
         Args:
-            generator (AsyncGenerator[RequestOutput, None]): Token generator.
+            generator: Token generator or lazy generator function.
             speaker_embeddings (Optional[torch.Tensor], optional): Speaker embeddings.
             multimodal_data (Optional[torch.Tensor], optional): Additional multimodal data.
             request (TTSRequest, optional): Original TTS request.
@@ -814,8 +815,8 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
         assert speaker_embeddings is not None, "Speaker embeddings must be provided for speech generation with XTTSv2."
         assert multimodal_data is not None, "Multimodal data must be provided for speech generation with XTTSv2."
 
-
-        async for output in generator:
+        gen_stream = generator() if callable(generator) else generator
+        async for output in gen_stream:
 
             if output.finished:
                 # get the hidden states

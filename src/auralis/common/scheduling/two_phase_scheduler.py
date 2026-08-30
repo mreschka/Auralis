@@ -184,10 +184,30 @@ class TwoPhaseScheduler:
             TimeoutError: If processing exceeds request_timeout.
         """
         parallel_inputs = request.first_phase_result.get('parallel_inputs', [])
-        generator_tasks = [
-            asyncio.create_task(self._process_generator(request, gen_input, idx))
-            for idx, gen_input in enumerate(parallel_inputs)
-        ]
+        if not parallel_inputs:
+            return
+
+        is_streaming = getattr(request.input, 'stream', False)
+        if len(parallel_inputs) > 1 and is_streaming:
+            # Prio 1 for sequence 0: run sequence 0 first for ultra-fast TTFT
+            task_0 = asyncio.create_task(self._process_generator(request, parallel_inputs[0], 0))
+
+            async def launch_rest():
+                # Allow task 0 to get initial GPU focus, then launch remaining tasks concurrently
+                await asyncio.sleep(0.4)
+                rest_tasks = [
+                    asyncio.create_task(self._process_generator(request, gen_input, idx + 1))
+                    for idx, gen_input in enumerate(parallel_inputs[1:])
+                ]
+                await asyncio.gather(*rest_tasks, return_exceptions=True)
+
+            rest_task = asyncio.create_task(launch_rest())
+            generator_tasks = [task_0, rest_task]
+        else:
+            generator_tasks = [
+                asyncio.create_task(self._process_generator(request, gen_input, idx))
+                for idx, gen_input in enumerate(parallel_inputs)
+            ]
 
         try:
             await asyncio.wait_for(
