@@ -223,15 +223,15 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
             max_model_len=self.gpt_config.max_text_tokens +
                           self.gpt_config.max_audio_tokens +
                           32 + 5 + 3, # this is from the xttsv2 code, 32 is the conditioning sql
-            gpu_memory_utilization=float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.45")),
+            gpu_memory_utilization=float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.80")),
             trust_remote_code=True,
             enforce_eager=True,
             limit_mm_per_prompt={"audio": 1}, # even if more audio are present, they'll be condendesed into one
-            max_num_seqs=max_seq_num,
+            max_num_seqs=int(os.environ.get("VLLM_MAX_NUM_SEQS", "64")),
             disable_log_stats=True, # temporary fix for the log stats, there is a known bug in vllm that will be fixed in the next relaese
             max_num_batched_tokens=(self.gpt_config.max_text_tokens +
                                     self.gpt_config.max_audio_tokens +
-                                    32 + 5 + 3) * max_seq_num,
+                                    32 + 5 + 3) * int(os.environ.get("VLLM_MAX_NUM_SEQS", "64")),
             #We round to the nearest multiple of 32 and multiply by max_seq_num to get the max batched number (arbitrary) of tokens
         )
         self.logger.info(f"Initializing VLLM engine with args: {engine_args}")
