@@ -257,6 +257,15 @@ def split_sentence(text: str, lang: str, text_split_length: int = 600) -> List[s
         else:
             merged.append(c)
 
+    # 5b. TTFT Optimization: Split first chunk at first clause pause if long (> 60 chars)
+    if len(merged) > 0 and len(merged[0]) > 60:
+        first = merged[0]
+        split_match = re.search(r'^(.{20,65}?[:;,–—])\s+(.+)$', first)
+        if split_match:
+            p1, p2 = split_match.group(1).strip(), split_match.group(2).strip()
+            if len(p1.split()) >= 3 and len(p2.split()) >= 2:
+                merged = [p1, p2] + merged[1:]
+
     # 6. Restore placeholders
     final_chunks = [c.replace('_ORD_', '.').replace('_DOT_', '.') for c in merged if c.strip()]
     if not final_chunks and text:
