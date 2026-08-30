@@ -189,28 +189,20 @@ async def generate_audio(request: AudioSpeechGenerationRequest):
         format_name = request.response_format.lower()
         media_type = "audio/pcm" if format_name == "pcm" else ("audio/wav" if format_name == "wav" else f"audio/{format_name}")
 
-        if request.stream:
-            async def stream_audio():
-                gen = await tts_engine.generate_speech_async(tts_request)
-                async for chunk in gen:
-                    if request.speed != 1.0:
-                        chunk = chunk.change_speed(request.speed)
-                    yield chunk.to_bytes(format_name)
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+        # Always enable streaming generation and return StreamingResponse so clients (Open WebUI) play immediately
+        tts_request.stream = True
 
-            return StreamingResponse(stream_audio(), media_type=media_type)
+        async def stream_audio():
+            gen = await tts_engine.generate_speech_async(tts_request)
+            async for chunk in gen:
+                if request.speed != 1.0:
+                    chunk = chunk.change_speed(request.speed)
+                yield chunk.to_bytes(format_name)
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-        output = await tts_engine.generate_speech_async(tts_request)
-        if request.speed != 1.0:
-            output = output.change_speed(request.speed)
-        
-        audio_bytes = output.to_bytes(format_name)
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        return Response(content=audio_bytes, media_type=media_type)
+        return StreamingResponse(stream_audio(), media_type=media_type)
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Error generating audio: {str(e)}"})

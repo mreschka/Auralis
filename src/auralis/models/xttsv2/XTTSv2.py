@@ -819,9 +819,19 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
         async for output in gen_stream:
 
             if output.finished:
+                token_ids = list(output.outputs[0].token_ids) if output.outputs and output.outputs[0].token_ids else []
+                if not token_ids:
+                    import numpy as np
+                    yield TTSOutput(
+                        array=np.zeros(240, dtype=np.float32),
+                        start_time=request.start_time,
+                        token_length=0
+                    )
+                    continue
+
                 # get the hidden states
                 hidden_states = await self.get_model_logits(
-                    list(output.outputs[0].token_ids),
+                    token_ids,
                     {
                         "audio": {
                             'embeds': multimodal_data,  # Use multimodal data for conditioning
