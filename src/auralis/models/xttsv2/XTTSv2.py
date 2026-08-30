@@ -752,10 +752,12 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
         generators = []
         requests_id = []
         for seq_index, sequence in enumerate(tokens_list):
-            # Dynamic max audio tokens proportional to text length to prevent runaway generation
+            # Dynamic max audio tokens proportional to text length (1 text token ≈ 3-4 audio tokens)
+            max_allowed = max(30, self.gpt_config.max_model_len - len(sequence) - 250) if hasattr(self.gpt_config, 'max_model_len') else 600
             dynamic_max_tokens = min(
                 self.gpt_config.gpt_max_audio_tokens,
-                max(30, int(len(sequence) * 12 + 30))
+                max_allowed,
+                max(30, int(len(sequence) * 4 + 25))
             )
             sampling_params = ExtendedSamplingParams(
                 temperature=request.temperature,

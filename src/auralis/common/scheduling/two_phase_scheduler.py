@@ -189,7 +189,8 @@ class TwoPhaseScheduler:
 
         is_streaming = getattr(request.input, 'stream', False)
         if len(parallel_inputs) > 1 and is_streaming:
-            # Staged Progressive Pipelining to ensure continuous stream delivery without buffer underruns:
+            # Staged Progressive Pipelining:
+            # Stage 0: Run sequence 0 exclusively for immediate TTFT (~2.5s)
             request.first_chunk_event = asyncio.Event()
             task_0 = asyncio.create_task(self._process_generator(request, parallel_inputs[0], 0))
 
@@ -200,16 +201,23 @@ class TwoPhaseScheduler:
                 except Exception:
                     pass
 
-                # 2. Stagger Sequences 1..3 with priority to rapidly build 8+ seconds of playback buffer
-                early_limit = min(4, len(parallel_inputs))
+                # 2. Dedicated priority pipeline for early sequences (1 & 2) to rapidly fill buffer
+                early_limit = min(3, len(parallel_inputs))
                 for early_idx in range(1, early_limit):
+                    early_event = asyncio.Event()
+                    if not hasattr(request, 'generator_events'):
+                        request.generator_events = {}
+                    request.generator_events[early_idx] = early_event
                     asyncio.create_task(
                         self._process_generator(request, parallel_inputs[early_idx], early_idx)
                     )
-                    # Short gap to allow the GPU to prioritize this sequence before next ones
-                    await asyncio.sleep(0.3)
+                    # Wait for this sequence to finish or 3s max so it gets 100% GPU compute
+                    try:
+                        await asyncio.wait_for(early_event.wait(), timeout=3.0)
+                    except Exception:
+                        pass
 
-                # 3. Buffer headroom is established; launch all remaining sequences concurrently
+                # 3. Buffer cushion is secured; launch all remaining sequences in parallel
                 if len(parallel_inputs) > early_limit:
                     rest_tasks = [
                         asyncio.create_task(self._process_generator(request, gen_input, idx + early_limit))

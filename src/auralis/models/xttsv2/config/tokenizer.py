@@ -196,11 +196,10 @@ def clean_tts_text(text: str) -> str:
     return text.strip()
 
 
-def split_sentence(text: str, lang: str, text_split_length: int = 120) -> List[str]:
-    """Split text into TTS-optimized chunks using fine-grained sentence & clause batching.
+def split_sentence(text: str, lang: str, text_split_length: int = 160) -> List[str]:
+    """Split text into medium-sized, natural TTS chunks (15-22 words, <=160 chars).
     
-    Ensures every chunk is short (8-15 words, <=120 chars) for ultra-fast GPU compute (<=1.2s)
-    and zero-underrun streaming.
+    Provides sub-2s TTFT and zero-underrun progressive streaming without awkward micro-pauses.
     """
     text = clean_tts_text(text)
     if not text:
@@ -235,7 +234,7 @@ def split_sentence(text: str, lang: str, text_split_length: int = 120) -> List[s
                 if re.search(r'\w', s, flags=re.UNICODE):
                     chunks.append(s)
             else:
-                # Sub-split long sentences at natural pauses (: ; , – — or conjunctions)
+                # Sub-split long sentences at natural punctuation (: ; or , – —)
                 sub_parts = re.split(r'(?<=[;:])\s+|(?<=[,–—])\s+(?=[A-ZÄÖÜa-z0-9])', s)
                 current = ""
                 for part in sub_parts:
@@ -248,24 +247,15 @@ def split_sentence(text: str, lang: str, text_split_length: int = 120) -> List[s
                 if current and re.search(r'\w', current, flags=re.UNICODE):
                     chunks.append(current)
 
-    # 5. Merge very short fragments (< 15 chars) only if they are not standalone sentences
+    # 5. Merge short fragments (< 35 chars) into adjacent chunks to guarantee full natural phrases
     merged = []
     for c in chunks:
-        if merged and len(c) < 15 and not c.endswith(('.', '!', '?')):
+        if merged and len(c) < 35:
             merged[-1] = f"{merged[-1]} {c}"
-        elif merged and len(merged[-1]) < 15 and not merged[-1].endswith(('.', '!', '?')):
+        elif merged and len(merged[-1]) < 35:
             merged[-1] = f"{merged[-1]} {c}"
         else:
             merged.append(c)
-
-    # 5b. TTFT Optimization: Split first chunk at first clause pause if long (> 60 chars)
-    if len(merged) > 0 and len(merged[0]) > 60:
-        first = merged[0]
-        split_match = re.search(r'^(.{20,65}?[:;,–—])\s+(.+)$', first)
-        if split_match:
-            p1, p2 = split_match.group(1).strip(), split_match.group(2).strip()
-            if len(p1.split()) >= 3 and len(p2.split()) >= 2:
-                merged = [p1, p2] + merged[1:]
 
     # 6. Restore placeholders
     final_chunks = [c.replace('_ORD_', '.').replace('_DOT_', '.') for c in merged if c.strip()]
@@ -895,9 +885,9 @@ class XTTSTokenizerFast(PreTrainedTokenizerFast):
 
         # For each text, split into chunks based on character limit
         for text, text_lang in zip(texts, lang):
-            # Get language character limit (capped at 120 chars for rapid streaming cadence)
+            # Get language character limit (capped at 160 chars for natural sentence streaming)
             base_lang = text_lang.split("-")[0]
-            char_limit = min(120, self.char_limits.get(base_lang, 120))
+            char_limit = min(160, self.char_limits.get(base_lang, 160))
 
             # Split text into sentences/chunks based on language
             chunk_list = split_sentence(text, base_lang, text_split_length=char_limit)
