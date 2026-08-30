@@ -254,12 +254,15 @@ class TextNormalizer:
                 num_cols = len(headers)
                 cols_word = loc["col_plural"] if num_cols != 1 else loc["col_singular"]
                 header_str = ", ".join(headers)
-                intro_str = loc["table_intro"].format(n=num_cols, cols_word=cols_word, headers=header_str)
-                parts = [intro_str]
+                intro_str = loc["table_intro"].format(n=num_cols, cols_word=cols_word, headers=header_str).strip()
+                if intro_str:
+                    blocks.append(intro_str if intro_str.endswith(('.', '!', '?', ':')) else intro_str + '.')
                 for r_idx, r in enumerate(rows, 1):
-                    row_str = ", ".join(r)
-                    parts.append(loc["table_row"].format(n=r_idx, row=row_str))
-                blocks.append(' '.join(parts))
+                    row_str = ", ".join(r).strip()
+                    row_text = loc["table_row"].format(n=r_idx, row=row_str).strip()
+                    row_text = re.sub(r'\.+$', '.', row_text)
+                    if row_text:
+                        blocks.append(row_text if row_text.endswith(('.', '!', '?', ':')) else row_text + '.')
                 i += 1
                 continue
             elif t.type == 'ordered_list_open':
