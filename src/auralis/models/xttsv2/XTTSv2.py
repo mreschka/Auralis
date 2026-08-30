@@ -752,10 +752,10 @@ class XTTSv2Engine(BaseAsyncTTSEngine):
         generators = []
         requests_id = []
         for seq_index, sequence in enumerate(tokens_list):
-            # Dynamic max audio tokens based on text length to prevent runaway hallucination on short phrases
+            # Dynamic max audio tokens proportional to text length to prevent runaway generation
             dynamic_max_tokens = min(
                 self.gpt_config.gpt_max_audio_tokens,
-                max(100, int(len(sequence) * 24 + 80))
+                max(30, int(len(sequence) * 12 + 30))
             )
             sampling_params = ExtendedSamplingParams(
                 temperature=request.temperature,
