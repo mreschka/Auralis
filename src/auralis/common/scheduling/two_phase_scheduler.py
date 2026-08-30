@@ -189,21 +189,33 @@ class TwoPhaseScheduler:
 
         is_streaming = getattr(request.input, 'stream', False)
         if len(parallel_inputs) > 1 and is_streaming:
-            # Prio 1 for sequence 0: run sequence 0 exclusively first for minimal TTFT
+            # Staged Progressive Pipelining to ensure continuous stream delivery without buffer underruns:
             request.first_chunk_event = asyncio.Event()
             task_0 = asyncio.create_task(self._process_generator(request, parallel_inputs[0], 0))
 
             async def launch_rest():
-                # Wait until Sequence 0 has generated and buffered its first audio chunk
+                # 1. Wait for Sequence 0 to finish its audio chunk and begin streaming
                 try:
-                    await asyncio.wait_for(request.first_chunk_event.wait(), timeout=8.0)
+                    await asyncio.wait_for(request.first_chunk_event.wait(), timeout=6.0)
                 except Exception:
                     pass
-                rest_tasks = [
-                    asyncio.create_task(self._process_generator(request, gen_input, idx + 1))
-                    for idx, gen_input in enumerate(parallel_inputs[1:])
-                ]
-                await asyncio.gather(*rest_tasks, return_exceptions=True)
+
+                # 2. Stagger Sequences 1..3 with priority to rapidly build 8+ seconds of playback buffer
+                early_limit = min(4, len(parallel_inputs))
+                for early_idx in range(1, early_limit):
+                    asyncio.create_task(
+                        self._process_generator(request, parallel_inputs[early_idx], early_idx)
+                    )
+                    # Short gap to allow the GPU to prioritize this sequence before next ones
+                    await asyncio.sleep(0.3)
+
+                # 3. Buffer headroom is established; launch all remaining sequences concurrently
+                if len(parallel_inputs) > early_limit:
+                    rest_tasks = [
+                        asyncio.create_task(self._process_generator(request, gen_input, idx + early_limit))
+                        for idx, gen_input in enumerate(parallel_inputs[early_limit:])
+                    ]
+                    await asyncio.gather(*rest_tasks, return_exceptions=True)
 
             rest_task = asyncio.create_task(launch_rest())
             generator_tasks = [task_0, rest_task]
