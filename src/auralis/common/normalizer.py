@@ -9,8 +9,10 @@ from typing import Dict, List, Optional, Tuple
 
 try:
     from auralis.common.i18n import get_locale, SUPPORTED_LANGUAGES
+    from auralis.common.dictionary import load_pronunciations, DEFAULT_PRONUNCIATIONS
 except ImportError:
     from i18n_v2 import get_locale, SUPPORTED_LANGUAGES
+    from dictionary import load_pronunciations, DEFAULT_PRONUNCIATIONS
 
 try:
     from markdown_it import MarkdownIt
@@ -103,31 +105,11 @@ class TextNormalizer:
             "#️⃣": "#", "*️⃣": "*"
         }
 
-        # Technical pronunciation dictionary (shared across languages)
-        default_pronunciations = {
-            "nginx": "Engine X",
-            "k8s": "Kubernetes",
-            "yaml": "Jammel",
-            "sql": "S-Q-L",
-            "jwt": "Jot-We-Te",
-            "api": "A-P-I",
-            "gui": "G-U-I",
-            "cli": "C-L-I",
-            "url": "U-R-L",
-            "uri": "U-R-I",
-            "ssl": "S-S-L",
-            "tls": "T-L-S",
-            "ssh": "S-S-H",
-            "html": "H-T-M-L",
-            "css": "C-S-S",
-            "json": "Jeyson",
-            "regex": "Reg-Ex",
-            "github": "Git-Hub",
-            "gitlab": "Git-Lab",
-        }
+        # Technical pronunciation dictionary loaded from dictionary.py and optional custom JSON
+        loaded_dict = load_pronunciations()
         if pronunciations:
-            default_pronunciations.update(pronunciations)
-        self.pronunciations = default_pronunciations
+            loaded_dict.update(pronunciations)
+        self.pronunciations = loaded_dict
 
     def _call_task_model(self, prompt: str) -> Optional[str]:
         """Call local Ollama task model with a short timeout and caching."""

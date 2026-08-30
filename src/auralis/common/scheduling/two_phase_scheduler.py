@@ -189,12 +189,16 @@ class TwoPhaseScheduler:
 
         is_streaming = getattr(request.input, 'stream', False)
         if len(parallel_inputs) > 1 and is_streaming:
-            # Prio 1 for sequence 0: run sequence 0 first for ultra-fast TTFT
+            # Prio 1 for sequence 0: run sequence 0 exclusively first for minimal TTFT
+            request.first_chunk_event = asyncio.Event()
             task_0 = asyncio.create_task(self._process_generator(request, parallel_inputs[0], 0))
 
             async def launch_rest():
-                # Allow task 0 to get initial GPU focus, then launch remaining tasks concurrently
-                await asyncio.sleep(0.4)
+                # Wait until Sequence 0 has generated and buffered its first audio chunk
+                try:
+                    await asyncio.wait_for(request.first_chunk_event.wait(), timeout=8.0)
+                except Exception:
+                    pass
                 rest_tasks = [
                     asyncio.create_task(self._process_generator(request, gen_input, idx + 1))
                     for idx, gen_input in enumerate(parallel_inputs[1:])
@@ -290,6 +294,8 @@ class TwoPhaseScheduler:
                 event = asyncio.Event()
                 event.set()
                 buffer.append((item, event))
+                if sequence_idx == 0 and hasattr(request, 'first_chunk_event'):
+                    request.first_chunk_event.set()
             except StopAsyncIteration:
                 self.logger.debug(f"Generator {sequence_idx} completed for request {request.id}")
                 break
@@ -324,6 +330,8 @@ class TwoPhaseScheduler:
             request.completed_generators += 1
             if sequence_idx in request.generator_events:
                 request.generator_events[sequence_idx].set()
+            if sequence_idx == 0 and hasattr(request, 'first_chunk_event'):
+                request.first_chunk_event.set()
 
     async def _yield_ordered_outputs(self, request: QueuedRequest) -> AsyncGenerator[Any, None]:
         """Yield outputs from all generators in sequence order.
